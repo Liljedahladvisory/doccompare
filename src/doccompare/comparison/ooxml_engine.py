@@ -128,9 +128,12 @@ def compare(
         old_blocks, new_blocks, matches, matched_old, new_body, author, date, rid,
     )
 
-    # 6. Write output .docx
+    # 6. Compute summary from the modified XML
+    summary = _compute_summary(new_tree)
+
+    # 7. Write output .docx
     _write_docx(new_path, output_path, new_tree)
-    return output_path
+    return output_path, summary
 
 
 # ── I/O helpers ─────────────────────────────────────────────────────────
@@ -151,6 +154,37 @@ def _write_docx(template: Path, output: Path, doc_tree: etree._Element):
                     zout.writestr(item, xml_bytes)
                 else:
                     zout.writestr(item, zin.read(item.filename))
+
+
+# ── Summary computation ─────────────────────────────────────────────────
+def _compute_summary(doc_tree: etree._Element) -> dict:
+    """Count inserted/deleted/unchanged words from the Track Changes markup."""
+    ns = {"w": W_NS}
+    added_words = 0
+    deleted_words = 0
+    unchanged_words = 0
+
+    body = doc_tree.find(W_BODY)
+    for p in body.iter(W_P):
+        for child in p:
+            if child.tag == W_INS:
+                for t in child.iter(W_T):
+                    if t.text:
+                        added_words += len(t.text.split())
+            elif child.tag == W_DEL:
+                for dt in child.iter(W_DEL_TEXT):
+                    if dt.text:
+                        deleted_words += len(dt.text.split())
+            elif child.tag == W_R:
+                t = child.find(W_T)
+                if t is not None and t.text:
+                    unchanged_words += len(t.text.split())
+
+    return {
+        "added_words": added_words,
+        "deleted_words": deleted_words,
+        "unchanged_words": unchanged_words,
+    }
 
 
 # ── Run normalization ───────────────────────────────────────────────────

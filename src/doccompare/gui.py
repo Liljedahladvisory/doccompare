@@ -76,7 +76,7 @@ class DocCompareApp:
         # ── App title ─────────────────────────────────────────────────────
         tk.Label(outer, text="DocCompare", font=(FONT, 22, "bold"), bg=BG, fg=FG).pack(anchor="w")
         tk.Label(
-            outer, text="Jämför två dokument och generera Track Changes",
+            outer, text="Jämför två dokument och generera en PDF-rapport",
             font=(FONT, 12), bg=BG, fg=SUBTITLE,
         ).pack(anchor="w", pady=(2, 22))
 
@@ -166,8 +166,8 @@ class DocCompareApp:
     def _pick_output(self):
         path = filedialog.asksaveasfilename(
             title="Spara rapport",
-            defaultextension=".docx",
-            filetypes=[("Word", "*.docx")],
+            defaultextension=".pdf",
+            filetypes=[("PDF", "*.pdf")],
             initialdir=Path.home() / "Desktop",
         )
         if path:
@@ -180,7 +180,7 @@ class DocCompareApp:
 
     def _default_output(self) -> Path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Path.home() / "Desktop" / f"comparison_{ts}.docx"
+        return Path.home() / "Desktop" / f"comparison_{ts}.pdf"
 
     def _run_comparison(self):
         self.compare_btn.config(state="disabled")
@@ -192,12 +192,32 @@ class DocCompareApp:
 
         def worker():
             try:
+                import tempfile
                 from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+                from doccompare.rendering.pdf_pipeline import produce_pdf
 
-                set_status("Jämför dokument…")
-                ooxml_compare(self.original_path, self.modified_path, output)
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmp_docx = Path(tmpdir) / "tracked.docx"
 
-                msg = f"Klar! Rapport sparad: {output.name}\nÖppna i Word för att granska ändringar."
+                    set_status("Jämför dokument (OOXML-diff)…")
+                    _, summary = ooxml_compare(
+                        self.original_path, self.modified_path, tmp_docx,
+                    )
+
+                    set_status("Konverterar till PDF via Word…")
+                    produce_pdf(
+                        tmp_docx, output, summary,
+                        original_name=self.original_path.name,
+                        modified_name=self.modified_path.name,
+                    )
+
+                s = summary
+                msg = (
+                    f"Klar! Rapport sparad: {output.name}\n"
+                    f"+{s.get('added_words', 0)} tillagda  "
+                    f"−{s.get('deleted_words', 0)} borttagna  "
+                    f"{s.get('unchanged_words', 0)} oförändrade ord"
+                )
                 self.root.after(0, lambda: self._on_success(msg, output))
 
             except Exception as e:
