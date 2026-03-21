@@ -12,7 +12,7 @@
     }
 
     @bottom-left {
-        content: string(doc-header-title);
+        content: "DocCompare";
         font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
         font-size: 9pt;
         color: #888;
@@ -39,7 +39,6 @@ body {
     border-bottom: 2px solid #2c3e50;
     padding-bottom: 12pt;
     margin-bottom: 16pt;
-    string-set: doc-header-title content();
 }
 
 .doc-header h1 {

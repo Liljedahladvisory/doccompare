@@ -53,10 +53,10 @@ def _similarity(a: str, b: str) -> float:
 
 
 def _diff_chars(original: str, modified: str) -> list:
-    """Character-level diff using diff-match-patch."""
+    """Character-level diff using diff-match-patch. No semantic cleanup to preserve exact chars."""
     dmp = dmp_module.diff_match_patch()
     diffs = dmp.diff_main(original, modified)
-    dmp.diff_cleanupSemantic(diffs)
+    # Do NOT call diff_cleanupSemantic — it expands char-level diffs to word-level
     return diffs
 
 

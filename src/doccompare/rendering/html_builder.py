@@ -3,6 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from doccompare.models import ComparisonResult, DiffElement, DiffSegment, DiffType, ElementType
 
+_CSS_PATH = Path(__file__).parent / "styles.css"
+
 
 CSS_CLASSES = {
     DiffType.ADDED: "added",
@@ -64,12 +66,13 @@ class HtmlBuilder:
 
         body_html = "\n".join(body_parts)
 
+        css = _CSS_PATH.read_text(encoding="utf-8")
         return f"""<!DOCTYPE html>
 <html lang="sv">
 <head>
 <meta charset="UTF-8">
 <title>DocCompare — {html.escape(original_path.name)} vs {html.escape(modified_path.name)}</title>
-<link rel="stylesheet" href="styles.css">
+<style>{css}</style>
 </head>
 <body>
 {body_html}
