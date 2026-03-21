@@ -52,12 +52,10 @@ def _similarity(a: str, b: str) -> float:
     return fuzz.ratio(a, b) / 100.0
 
 
-def _diff_words(original: str, modified: str) -> list:
-    """Word-level diff using diff-match-patch."""
+def _diff_chars(original: str, modified: str) -> list:
+    """Character-level diff using diff-match-patch."""
     dmp = dmp_module.diff_match_patch()
-    a_enc, b_enc, line_array = dmp.diff_linesToChars(original, modified)
-    diffs = dmp.diff_main(a_enc, b_enc, checklines=False)
-    dmp.diff_charsToLines(diffs, line_array)
+    diffs = dmp.diff_main(original, modified)
     dmp.diff_cleanupSemantic(diffs)
     return diffs
 
@@ -83,25 +81,23 @@ def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
     )
 
 
-def _resolve_formatting(text: str, runs: list) -> set:
-    """Find the formatting for `text` by scanning runs in order."""
-    pos = 0
-    for run in runs:
-        run_end = pos + len(run.text)
-        if pos <= 0 < run_end:
-            return run.formatting
-        pos = run_end
-    return runs[0].formatting if runs else set()
+def _element_formatting(elem: DocumentElement) -> set:
+    """Get the union of all formatting across an element's runs."""
+    fmt = set()
+    for run in elem.runs:
+        fmt |= run.formatting
+    return fmt
 
 
 def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffElement:
-    """Diff text within two matched elements, preserving modified doc formatting."""
+    """Character-level diff within two matched elements, preserving formatting."""
     orig_text = orig.plain_text
     mod_text = mod.plain_text
+    orig_fmt = _element_formatting(orig)
+    mod_fmt = _element_formatting(mod)
 
     if orig_text == mod_text:
-        fmt = _resolve_formatting(orig_text, mod.runs) if mod.runs else set()
-        segment = DiffSegment(diff_type=DiffType.UNCHANGED, text=orig_text, original_formatting=fmt)
+        segment = DiffSegment(diff_type=DiffType.UNCHANGED, text=orig_text, original_formatting=mod_fmt)
         return DiffElement(
             element_type=orig.element_type,
             level=orig.level,
@@ -109,24 +105,18 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
             diff_type=DiffType.UNCHANGED,
         )
 
-    raw_diffs = _diff_words(orig_text, mod_text)
+    raw_diffs = _diff_chars(orig_text, mod_text)
     segments = []
     has_changes = False
-    mod_pos = 0
 
     for op, text in raw_diffs:
         if op == 0:
-            fmt = _resolve_formatting(text, mod.runs) if mod.runs else set()
-            segments.append(DiffSegment(diff_type=DiffType.UNCHANGED, text=text, original_formatting=fmt))
-            mod_pos += len(text)
+            segments.append(DiffSegment(diff_type=DiffType.UNCHANGED, text=text, original_formatting=mod_fmt))
         elif op == 1:
-            fmt = _resolve_formatting(text, mod.runs) if mod.runs else set()
-            segments.append(DiffSegment(diff_type=DiffType.ADDED, text=text, original_formatting=fmt))
-            mod_pos += len(text)
+            segments.append(DiffSegment(diff_type=DiffType.ADDED, text=text, original_formatting=mod_fmt))
             has_changes = True
         elif op == -1:
-            fmt = orig.runs[0].formatting if orig.runs else set()
-            segments.append(DiffSegment(diff_type=DiffType.DELETED, text=text, original_formatting=fmt))
+            segments.append(DiffSegment(diff_type=DiffType.DELETED, text=text, original_formatting=orig_fmt))
             has_changes = True
 
     diff_type = DiffType.MODIFIED if has_changes else DiffType.UNCHANGED
