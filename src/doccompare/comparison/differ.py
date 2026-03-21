@@ -1,3 +1,4 @@
+import re
 from doccompare.models import (
     ParsedDocument, DocumentElement, DiffElement, DiffSegment,
     DiffType, ElementType, ComparisonResult
@@ -52,12 +53,80 @@ def _similarity(a: str, b: str) -> float:
     return fuzz.ratio(a, b) / 100.0
 
 
-def _diff_chars(original: str, modified: str) -> list:
-    """Character-level diff using diff-match-patch. No semantic cleanup to preserve exact chars."""
-    dmp = dmp_module.diff_match_patch()
-    diffs = dmp.diff_main(original, modified)
-    # Do NOT call diff_cleanupSemantic — it expands char-level diffs to word-level
-    return diffs
+# Minimum similarity (0–100) between two words to apply char-level sub-diff.
+# Below this threshold, the words are shown as full delete + insert.
+_CHAR_DIFF_THRESHOLD = 50
+
+
+def _tokenize(text: str) -> list:
+    """Split text into alternating word and non-word (space/punct) tokens."""
+    return re.findall(r'\w+|[^\w]+', text)
+
+
+def _lcs_token_ops(a: list, b: list) -> list:
+    """LCS diff on token lists. Returns [(op, token)] where op is -1/0/1."""
+    n, m = len(a), len(b)
+    # Cap to avoid O(n²) slowdown on very long paragraphs
+    if n * m > 40000:
+        return [(-1, t) for t in a] + [(1, t) for t in b]
+    dp = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if a[i - 1] == b[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            else:
+                dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
+    ops = []
+    i, j = n, m
+    while i > 0 or j > 0:
+        if i > 0 and j > 0 and a[i - 1] == b[j - 1]:
+            ops.append((0, a[i - 1]))
+            i -= 1; j -= 1
+        elif j > 0 and (i == 0 or dp[i][j - 1] >= dp[i - 1][j]):
+            ops.append((1, b[j - 1]))
+            j -= 1
+        else:
+            ops.append((-1, a[i - 1]))
+            i -= 1
+    ops.reverse()
+    return ops
+
+
+def _diff_hybrid(original: str, modified: str) -> list:
+    """
+    Hybrid diff: word-level structure with char-level precision inside changed word pairs.
+
+    - Unchanged tokens: EQUAL
+    - Changed whitespace/punctuation: DELETE old + INSERT new
+    - Changed word pair with similarity >= threshold: char-level sub-diff
+    - Changed word pair below threshold: full word DELETE + INSERT
+    """
+    from rapidfuzz import fuzz
+
+    orig_tokens = _tokenize(original)
+    mod_tokens = _tokenize(modified)
+    token_ops = _lcs_token_ops(orig_tokens, mod_tokens)
+
+    result = []
+    i = 0
+    while i < len(token_ops):
+        op, tok = token_ops[i]
+        # Look for a DELETE immediately followed by an INSERT
+        if op == -1 and i + 1 < len(token_ops) and token_ops[i + 1][0] == 1:
+            del_tok = tok
+            ins_tok = token_ops[i + 1][1]
+            # Char-level sub-diff only for actual word tokens that are similar enough
+            if del_tok.strip() and ins_tok.strip() and fuzz.ratio(del_tok, ins_tok) >= _CHAR_DIFF_THRESHOLD:
+                dmp = dmp_module.diff_match_patch()
+                result.extend(dmp.diff_main(del_tok, ins_tok))
+            else:
+                result.append((-1, del_tok))
+                result.append((1, ins_tok))
+            i += 2
+        else:
+            result.append((op, tok))
+            i += 1
+    return result
 
 
 def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
@@ -147,7 +216,7 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
             diff_type=DiffType.UNCHANGED,
         )
 
-    raw_diffs = _diff_chars(orig_text, mod_text)
+    raw_diffs = _diff_hybrid(orig_text, mod_text)
     segments = []
     has_changes = False
     orig_pos = 0
