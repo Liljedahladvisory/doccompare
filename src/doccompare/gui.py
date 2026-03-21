@@ -53,14 +53,22 @@ class DocCompareApp:
         outer.pack(padx=36, pady=(28, 28), fill="both")
 
         # ── Logo ──────────────────────────────────────────────────────────
-        logo_frame = tk.Frame(outer, bg=BG)
-        logo_frame.pack(anchor="w", pady=(0, 20))
-        tk.Label(
-            logo_frame, text="Liljedahl", font=(FONT, 18), bg=BG, fg="#8e8e93",
-        ).pack(side="left")
-        tk.Label(
-            logo_frame, text=" Advisory", font=(FONT, 18, "bold"), bg=BG, fg="#636366",
-        ).pack(side="left")
+        logo_path = Path(__file__).parent / "assets" / "logo.png"
+        try:
+            from PIL import Image, ImageTk
+            img = Image.open(logo_path)
+            # Scale to height 40px, preserving aspect ratio
+            target_h = 40
+            ratio = target_h / img.height
+            img = img.resize((int(img.width * ratio), target_h), Image.LANCZOS)
+            self._logo_img = ImageTk.PhotoImage(img)
+            tk.Label(outer, image=self._logo_img, bg=BG).pack(anchor="w", pady=(0, 20))
+        except Exception:
+            # Fallback to text if image can't be loaded
+            logo_frame = tk.Frame(outer, bg=BG)
+            logo_frame.pack(anchor="w", pady=(0, 20))
+            tk.Label(logo_frame, text="Liljedahl", font=(FONT, 18), bg=BG, fg="#8e8e93").pack(side="left")
+            tk.Label(logo_frame, text=" Advisory", font=(FONT, 18, "bold"), bg=BG, fg="#636366").pack(side="left")
 
         # ── Divider ───────────────────────────────────────────────────────
         tk.Frame(outer, bg="#3a3a3c", height=1).pack(fill="x", pady=(0, 20))
