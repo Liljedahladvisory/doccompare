@@ -87,42 +87,42 @@ class DocxParser(DocumentParser):
     def _parse_paragraph(self, para, element_id: str, doc=None) -> "DocumentElement | None":
         style_name = para.style.name if para.style else "Normal"
 
-        # Determine element type
+        # Check for DOCX numbering via w:numPr (applies to headings AND paragraphs)
         list_style = ""
         list_numid = 0
         list_lvl_text = ""
+        list_ilvl = 0
+        pPr = para._p.find(qn('w:pPr'))
+        numPr = pPr.find(qn('w:numPr')) if pPr is not None else None
+        has_numbering = False
+        if numPr is not None:
+            ilvl_el = numPr.find(qn('w:ilvl'))
+            numId_el = numPr.find(qn('w:numId'))
+            if ilvl_el is not None and numId_el is not None:
+                numid = int(numId_el.get(qn('w:val'), 0))
+                if numid != 0:
+                    ilvl = int(ilvl_el.get(qn('w:val'), 0))
+                    has_numbering = True
+                    list_numid = numid
+                    list_ilvl = ilvl
+                    info = self._get_list_info(doc, numid, ilvl) if doc is not None else {}
+                    list_style = info.get('num_fmt', 'bullet')
+                    list_lvl_text = info.get('lvl_text', '')
+
+        # Determine element type
         if style_name in HEADING_STYLES:
             elem_type = ElementType.HEADING
             level = HEADING_STYLES[style_name]
+            # Headings keep their heading level; numbering info is carried separately
+        elif has_numbering:
+            elem_type = ElementType.LIST_ITEM
+            level = ilvl
+        elif any(s in style_name for s in LIST_STYLES) or "List" in style_name:
+            elem_type = ElementType.LIST_ITEM
+            level = 0
         else:
-            # Check for DOCX numbering via w:numPr
-            pPr = para._p.find(qn('w:pPr'))
-            numPr = pPr.find(qn('w:numPr')) if pPr is not None else None
-            if numPr is not None:
-                ilvl_el = numPr.find(qn('w:ilvl'))
-                numId_el = numPr.find(qn('w:numId'))
-                if ilvl_el is not None and numId_el is not None:
-                    ilvl = int(ilvl_el.get(qn('w:val'), 0))
-                    numid = int(numId_el.get(qn('w:val'), 0))
-                    if numid != 0:
-                        elem_type = ElementType.LIST_ITEM
-                        level = ilvl
-                        list_numid = numid
-                        info = self._get_list_info(doc, numid, ilvl) if doc is not None else {}
-                        list_style = info.get('num_fmt', 'bullet')
-                        list_lvl_text = info.get('lvl_text', '')
-                    else:
-                        elem_type = ElementType.PARAGRAPH
-                        level = 0
-                else:
-                    elem_type = ElementType.PARAGRAPH
-                    level = 0
-            elif any(s in style_name for s in LIST_STYLES) or "List" in style_name:
-                elem_type = ElementType.LIST_ITEM
-                level = 0
-            else:
-                elem_type = ElementType.PARAGRAPH
-                level = 0
+            elem_type = ElementType.PARAGRAPH
+            level = 0
 
         runs = []
         for run in para.runs:
@@ -172,6 +172,7 @@ class DocxParser(DocumentParser):
             list_style=list_style,
             list_numid=list_numid,
             list_lvl_text=list_lvl_text,
+            list_ilvl=list_ilvl,
             alignment=alignment,
             left_indent_pt=_to_pt(pf.left_indent),
             right_indent_pt=_to_pt(pf.right_indent),

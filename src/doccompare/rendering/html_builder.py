@@ -248,7 +248,7 @@ class HtmlBuilder:
                 else:
                     last_list_style = list_style
 
-                label = tracker.next_label(numid, elem.level, elem.list_lvl_text, list_style)
+                label = tracker.next_label(numid, elem.list_ilvl, elem.list_lvl_text, list_style)
                 elem_class = ""
                 if elem.diff_type == DiffType.ADDED:
                     elem_class = "element-added"
@@ -274,7 +274,26 @@ class HtmlBuilder:
                 )
             else:
                 close_list()
-                parts.append(self._render_element(elem))
+                # Numbered headings: if a heading has numbering info, prepend the label
+                if elem.element_type == ElementType.HEADING and elem.list_numid:
+                    label = tracker.next_label(
+                        elem.list_numid, elem.list_ilvl, elem.list_lvl_text, elem.list_style
+                    )
+                    elem_class = ""
+                    if elem.diff_type == DiffType.ADDED:
+                        elem_class = "element-added"
+                    elif elem.diff_type == DiffType.DELETED:
+                        elem_class = "element-deleted"
+                    inner = self._render_segments(elem.segments)
+                    pstyle = self._para_style(elem)
+                    style_attr = f' style="{pstyle}"' if pstyle else ""
+                    h_level = max(1, min(6, elem.level or 1))
+                    parts.append(
+                        f'<h{h_level} class="{elem_class}"{style_attr}>'
+                        f'<span class="list-marker">{html.escape(label)}&nbsp;</span>{inner}</h{h_level}>'
+                    )
+                else:
+                    parts.append(self._render_element(elem))
 
         close_list()
         return "\n".join(parts)

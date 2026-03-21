@@ -37,6 +37,7 @@ class DocumentElement:
     list_style: str = ""
     list_numid: int = 0
     list_lvl_text: str = ""
+    list_ilvl: int = 0  # numbering indent level (0-based), separate from heading level
     # Paragraph-level formatting
     alignment: Optional[str] = None          # "left", "center", "right", "justify"
     left_indent_pt: Optional[float] = None   # points
@@ -85,6 +86,7 @@ class DiffElement:
     list_style: str = ""
     list_numid: int = 0
     list_lvl_text: str = ""
+    list_ilvl: int = 0
     # Paragraph-level formatting (from modified document)
     alignment: Optional[str] = None
     left_indent_pt: Optional[float] = None

@@ -209,6 +209,7 @@ def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
         list_style=elem.list_style,
         list_numid=elem.list_numid,
         list_lvl_text=elem.list_lvl_text,
+        list_ilvl=elem.list_ilvl,
     )
     _copy_para_fmt(elem, de)
     return de
@@ -283,6 +284,7 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
             list_style=mod.list_style,
             list_numid=mod.list_numid,
             list_lvl_text=mod.list_lvl_text,
+            list_ilvl=mod.list_ilvl,
         )
         _copy_para_fmt(mod, de)
         return de
@@ -316,6 +318,7 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
         list_style=mod.list_style,
         list_numid=mod.list_numid,
         list_lvl_text=mod.list_lvl_text,
+        list_ilvl=mod.list_ilvl,
     )
     _copy_para_fmt(mod, de)
     return de
