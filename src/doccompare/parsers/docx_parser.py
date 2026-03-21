@@ -52,11 +52,13 @@ class DocxParser(DocumentParser):
 
         return ParsedDocument(elements=elements, metadata=metadata)
 
-    def _get_num_fmt(self, doc, num_id: int, ilvl: int) -> str:
+    def _get_list_info(self, doc, num_id: int, ilvl: int) -> dict:
+        """Return num_fmt, lvl_text, and start_val for a numbering level."""
+        result = {'num_fmt': 'bullet', 'lvl_text': '', 'start_val': 1}
         try:
             np = doc.part.numbering_part
             if np is None:
-                return 'bullet'
+                return result
             nxml = np._element
             for num in nxml.findall(qn('w:num')):
                 if num.get(qn('w:numId')) == str(num_id):
@@ -69,11 +71,18 @@ class DocxParser(DocumentParser):
                             for lvl in ab.findall(qn('w:lvl')):
                                 if lvl.get(qn('w:ilvl')) == str(ilvl):
                                     nf = lvl.find(qn('w:numFmt'))
+                                    lt = lvl.find(qn('w:lvlText'))
+                                    sv = lvl.find(qn('w:start'))
                                     if nf is not None:
-                                        return nf.get(qn('w:val'), 'bullet')
+                                        result['num_fmt'] = nf.get(qn('w:val'), 'bullet')
+                                    if lt is not None:
+                                        result['lvl_text'] = lt.get(qn('w:val'), '')
+                                    if sv is not None:
+                                        result['start_val'] = int(sv.get(qn('w:val'), '1'))
+                                    return result
         except Exception:
             pass
-        return 'bullet'
+        return result
 
     def _parse_paragraph(self, para, element_id: str, doc=None) -> "DocumentElement | None":
         style_name = para.style.name if para.style else "Normal"
@@ -81,6 +90,7 @@ class DocxParser(DocumentParser):
         # Determine element type
         list_style = ""
         list_numid = 0
+        list_lvl_text = ""
         if style_name in HEADING_STYLES:
             elem_type = ElementType.HEADING
             level = HEADING_STYLES[style_name]
@@ -98,7 +108,9 @@ class DocxParser(DocumentParser):
                         elem_type = ElementType.LIST_ITEM
                         level = ilvl
                         list_numid = numid
-                        list_style = self._get_num_fmt(doc, numid, ilvl) if doc is not None else 'bullet'
+                        info = self._get_list_info(doc, numid, ilvl) if doc is not None else {}
+                        list_style = info.get('num_fmt', 'bullet')
+                        list_lvl_text = info.get('lvl_text', '')
                     else:
                         elem_type = ElementType.PARAGRAPH
                         level = 0
@@ -143,6 +155,7 @@ class DocxParser(DocumentParser):
             element_id=element_id,
             list_style=list_style,
             list_numid=list_numid,
+            list_lvl_text=list_lvl_text,
         )
 
     def _parse_table(self, table, table_id: str) -> list:

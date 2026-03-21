@@ -6,6 +6,29 @@ from doccompare.models import (
 import diff_match_patch as dmp_module
 
 
+_TEXT_TYPES = {ElementType.PARAGRAPH, ElementType.LIST_ITEM}
+
+
+def _can_match(o: DocumentElement, mod: DocumentElement) -> bool:
+    """Decide if two elements are candidates for matching.
+
+    Rules:
+    - Headings: must share the same type and level; similarity > 0.4
+    - Text elements (paragraph / list item): type may differ freely;
+      similarity > 0.6 (high bar prevents matching different clauses
+      that share legal boilerplate)
+    - Table rows: same type; similarity > 0.4
+    """
+    sim = _similarity(o.plain_text, mod.plain_text)
+    if o.element_type == ElementType.HEADING or mod.element_type == ElementType.HEADING:
+        return (o.element_type == mod.element_type
+                and o.level == mod.level
+                and sim > 0.4)
+    if o.element_type in _TEXT_TYPES and mod.element_type in _TEXT_TYPES:
+        return sim > 0.6
+    return o.element_type == mod.element_type and sim > 0.4
+
+
 def _lcs_match(original_elements: list, modified_elements: list) -> list:
     """Match elements using LCS to find corresponding pairs."""
     n, m = len(original_elements), len(modified_elements)
@@ -13,11 +36,7 @@ def _lcs_match(original_elements: list, modified_elements: list) -> list:
 
     for i in range(1, n + 1):
         for j in range(1, m + 1):
-            o = original_elements[i - 1]
-            mod = modified_elements[j - 1]
-            if (o.element_type == mod.element_type and
-                    o.level == mod.level and
-                    _similarity(o.plain_text, mod.plain_text) > 0.3):
+            if _can_match(original_elements[i - 1], modified_elements[j - 1]):
                 dp[i][j] = dp[i - 1][j - 1] + 1
             else:
                 dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
@@ -26,12 +45,8 @@ def _lcs_match(original_elements: list, modified_elements: list) -> list:
     matches = []
     i, j = n, m
     while i > 0 and j > 0:
-        o = original_elements[i - 1]
-        mod = modified_elements[j - 1]
-        if (o.element_type == mod.element_type and
-                o.level == mod.level and
-                _similarity(o.plain_text, mod.plain_text) > 0.3 and
-                dp[i][j] == dp[i - 1][j - 1] + 1):
+        if (_can_match(original_elements[i - 1], modified_elements[j - 1])
+                and dp[i][j] == dp[i - 1][j - 1] + 1):
             matches.append((i - 1, j - 1))
             i -= 1
             j -= 1
@@ -150,6 +165,7 @@ def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
         diff_type=diff_type,
         list_style=elem.list_style,
         list_numid=elem.list_numid,
+        list_lvl_text=elem.list_lvl_text,
     )
 
 
@@ -221,6 +237,7 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
             diff_type=DiffType.UNCHANGED,
             list_style=mod.list_style,
             list_numid=mod.list_numid,
+        list_lvl_text=mod.list_lvl_text,
         )
 
     raw_diffs = _diff_hybrid(orig_text, mod_text)
@@ -251,6 +268,7 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
         diff_type=diff_type,
         list_style=mod.list_style,
         list_numid=mod.list_numid,
+        list_lvl_text=mod.list_lvl_text,
     )
 
 

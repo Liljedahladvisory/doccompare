@@ -36,6 +36,7 @@ class DocumentElement:
     children: list = field(default_factory=list)
     list_style: str = ""
     list_numid: int = 0
+    list_lvl_text: str = ""
 
     @property
     def plain_text(self) -> str:
@@ -74,6 +75,7 @@ class DiffElement:
     diff_type: DiffType = DiffType.UNCHANGED
     list_style: str = ""
     list_numid: int = 0
+    list_lvl_text: str = ""
 
 
 @dataclass
