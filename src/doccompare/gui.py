@@ -15,7 +15,7 @@ SUBTITLE = "#aeaeb2"
 ACCENT = "#0a84ff"
 SUCCESS = "#30d158"
 ERROR = "#ff453a"
-BTN_FG = "#ffffff"
+BTN_FG = "#1c1c1e"
 FONT = "SF Pro Display" if sys.platform == "darwin" else "Segoe UI"
 
 
@@ -94,7 +94,7 @@ class DocCompareApp:
             outer, text="Jämför dokument", command=self._run_comparison,
             bg=ACCENT, fg=BTN_FG, font=(FONT, 13, "bold"),
             relief="flat", cursor="hand2", state="disabled",
-            activebackground="#0060cc", activeforeground=BTN_FG,
+            activeforeground=BTN_FG,
         )
         self.compare_btn.pack(fill="x", ipady=11, pady=(4, 14))
 
@@ -130,7 +130,7 @@ class DocCompareApp:
             row, text=btn_text, command=command,
             bg=btn_color or ACCENT, fg=BTN_FG, font=(FONT, 11),
             relief="flat", padx=14, cursor="hand2",
-            activebackground="#0060cc", activeforeground=BTN_FG,
+            activeforeground=BTN_FG,
         ).pack(side="left", padx=(8, 0), ipady=6)
 
         return lbl
