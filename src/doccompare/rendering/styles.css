@@ -1,0 +1,247 @@
+/* DocCompare — Report Stylesheet */
+
+@page {
+    size: A4;
+    margin: 2cm 2.5cm 2.5cm 2.5cm;
+
+    @top-center {
+        content: "DocCompare — Dokumentjämförelse";
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        font-size: 9pt;
+        color: #888;
+    }
+
+    @bottom-right {
+        content: "Sida " counter(page) " av " counter(pages);
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        font-size: 9pt;
+        color: #888;
+    }
+
+    @bottom-left {
+        content: string(doc-header-title);
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+        font-size: 9pt;
+        color: #888;
+    }
+}
+
+/* Base styles */
+* {
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Georgia", "Times New Roman", Times, serif;
+    font-size: 11pt;
+    line-height: 1.6;
+    color: #1a1a1a;
+    background: #ffffff;
+    margin: 0;
+    padding: 0;
+}
+
+/* Document header */
+.doc-header {
+    border-bottom: 2px solid #2c3e50;
+    padding-bottom: 12pt;
+    margin-bottom: 16pt;
+    string-set: doc-header-title content();
+}
+
+.doc-header h1 {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 20pt;
+    font-weight: 700;
+    color: #2c3e50;
+    margin: 0 0 6pt 0;
+    padding: 0;
+    border: none;
+}
+
+.doc-header .meta {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9pt;
+    color: #555;
+}
+
+/* Summary box */
+.summary-box {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4pt;
+    padding: 10pt 14pt;
+    margin-bottom: 14pt;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 10pt;
+    line-height: 1.8;
+}
+
+.stat {
+    display: inline-block;
+    margin-right: 16pt;
+    font-weight: 500;
+}
+
+.stat-added {
+    color: #0047ab;
+}
+
+.stat-deleted {
+    color: #c0392b;
+}
+
+.stat-moved {
+    color: #1a7a3f;
+}
+
+/* Headings */
+h1, h2, h3, h4, h5, h6 {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: #2c3e50;
+    margin-top: 18pt;
+    margin-bottom: 6pt;
+    page-break-after: avoid;
+}
+
+h1 { font-size: 18pt; font-weight: 700; border-bottom: 1px solid #bdc3c7; padding-bottom: 4pt; }
+h2 { font-size: 15pt; font-weight: 700; }
+h3 { font-size: 13pt; font-weight: 600; }
+h4 { font-size: 11pt; font-weight: 600; }
+h5 { font-size: 11pt; font-weight: 500; font-style: italic; }
+h6 { font-size: 10pt; font-weight: 500; color: #555; }
+
+/* Paragraphs */
+p {
+    margin-top: 0;
+    margin-bottom: 8pt;
+    orphans: 3;
+    widows: 3;
+}
+
+/* List items */
+p.list-item {
+    margin-left: 16pt;
+    text-indent: -8pt;
+    padding-left: 8pt;
+}
+
+/* =========================================================
+   DIFF ANNOTATIONS
+   ========================================================= */
+
+/* Added text: blue + underline */
+span.added {
+    color: #0047ab;
+    text-decoration: underline;
+    text-decoration-color: #0047ab;
+    background-color: #e8f0fe;
+    border-radius: 2pt;
+    padding: 0 1pt;
+}
+
+/* Deleted text: red + strikethrough */
+span.deleted {
+    color: #c0392b;
+    text-decoration: line-through;
+    text-decoration-color: #c0392b;
+    background-color: #fdecea;
+    border-radius: 2pt;
+    padding: 0 1pt;
+}
+
+/* Moved text — destination (new location): green */
+span.moved-to {
+    color: #1a7a3f;
+    background-color: #e6f4ea;
+    border-bottom: 2px solid #1a7a3f;
+    border-radius: 2pt;
+    padding: 0 1pt;
+}
+
+/* Moved text — origin (where it was): muted green + strikethrough */
+span.moved-from {
+    color: #2e7d52;
+    text-decoration: line-through;
+    text-decoration-color: #2e7d52;
+    background-color: #f0faf4;
+    border-radius: 2pt;
+    padding: 0 1pt;
+    opacity: 0.75;
+}
+
+/* Whole-element backgrounds for heavily changed paragraphs */
+p.element-added,
+h1.element-added, h2.element-added, h3.element-added,
+h4.element-added, h5.element-added, h6.element-added {
+    background-color: #eef4ff;
+    border-left: 3pt solid #0047ab;
+    padding-left: 8pt;
+    margin-left: -11pt;
+}
+
+p.element-deleted,
+h1.element-deleted, h2.element-deleted, h3.element-deleted,
+h4.element-deleted, h5.element-deleted, h6.element-deleted {
+    background-color: #fff5f5;
+    border-left: 3pt solid #c0392b;
+    padding-left: 8pt;
+    margin-left: -11pt;
+}
+
+/* Page break hint */
+hr.page-break {
+    border: none;
+    border-top: 1px dashed #ccc;
+    margin: 14pt 0;
+    page-break-after: always;
+}
+
+/* Tables */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-bottom: 12pt;
+    font-size: 10pt;
+    page-break-inside: avoid;
+}
+
+td, th {
+    border: 1px solid #bdc3c7;
+    padding: 5pt 8pt;
+    vertical-align: top;
+}
+
+th {
+    background-color: #ecf0f1;
+    font-weight: 600;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+tr.element-added {
+    background-color: #eef4ff;
+}
+
+tr.element-deleted {
+    background-color: #fff5f5;
+}
+
+/* Print-specific overrides */
+@media print {
+    body {
+        font-size: 10.5pt;
+    }
+
+    .summary-box {
+        break-inside: avoid;
+    }
+
+    h1, h2, h3 {
+        break-after: avoid;
+    }
+
+    p, li {
+        orphans: 3;
+        widows: 3;
+    }
+}
