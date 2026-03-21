@@ -87,7 +87,9 @@ def compare(
     Uses the newer document as the baseline and injects deletions from
     the older document.
     """
-    old_path, new_path, output_path = Path(old_path), Path(new_path), Path(output_path)
+    old_path = Path(old_path)
+    new_path = Path(new_path)
+    output_path = Path(output_path) if output_path else None
     date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     rid = _RevId()
 
@@ -131,9 +133,11 @@ def compare(
     # 6. Compute summary from the modified XML
     summary = _compute_summary(new_tree)
 
-    # 7. Write output .docx
-    _write_docx(new_path, output_path, new_tree)
-    return output_path, summary
+    # 7. Optionally write output .docx
+    if output_path:
+        _write_docx(new_path, output_path, new_tree)
+
+    return new_tree, summary
 
 
 # ── I/O helpers ─────────────────────────────────────────────────────────

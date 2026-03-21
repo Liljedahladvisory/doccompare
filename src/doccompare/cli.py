@@ -1,5 +1,4 @@
 import sys
-import tempfile
 from pathlib import Path
 from datetime import datetime
 import click
@@ -31,8 +30,8 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
     """Compare two .docx files and generate a PDF with tracked changes.
 
     ORIGINAL is the older version, MODIFIED is the newer version.
-    The engine diffs the OOXML trees natively, injects Track Changes markup,
-    converts to PDF via Microsoft Word, and appends a summary page.
+    The engine diffs the OOXML trees natively, then renders the tracked
+    changes directly to PDF. No external applications required.
 
     Examples:
 
@@ -46,7 +45,6 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
         logger.remove()
         logger.add(sys.stderr, level="WARNING")
 
-    # Validate formats
     for path in [original, modified]:
         if path.suffix.lower() != ".docx":
             click.echo(f"Error: Unsupported format '{path.suffix}'. Only .docx is supported.", err=True)
@@ -60,28 +58,23 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
     from doccompare.rendering.pdf_pipeline import produce_pdf
 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
-        task = progress.add_task("Jämför dokument (OOXML-diff)…", total=None)
+        task = progress.add_task("Jämför dokument…", total=None)
         try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmp_docx = Path(tmpdir) / "tracked.docx"
+            # Step 1: OOXML comparison → modified XML tree with track changes
+            doc_tree, summary = ooxml_compare(original, modified, None, author=author)
 
-                # Step 1: OOXML comparison → .docx with track changes
-                _, summary = ooxml_compare(original, modified, tmp_docx, author=author)
-
-                # Step 2: Convert to PDF via Word + append summary page
-                progress.update(task, description="Konverterar till PDF via Word…")
-                produce_pdf(
-                    tmp_docx, output, summary,
-                    original_name=original.name,
-                    modified_name=modified.name,
-                )
-
+            # Step 2: Render directly to PDF (no temp files, no Word)
+            progress.update(task, description="Renderar PDF…")
+            produce_pdf(
+                doc_tree, output, summary,
+                original_name=original.name,
+                modified_name=modified.name,
+            )
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         progress.update(task, description="Done!", completed=1, total=1)
 
-    # Print summary
     s = summary
     console.print(f"\n[bold]Jämförelse klar![/bold] Rapport sparad: [cyan]{output}[/cyan]")
     console.print(f"  [green]+{s.get('added_words', 0)} ord tillagda[/green]  "

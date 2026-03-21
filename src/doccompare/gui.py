@@ -192,24 +192,20 @@ class DocCompareApp:
 
         def worker():
             try:
-                import tempfile
                 from doccompare.comparison.ooxml_engine import compare as ooxml_compare
                 from doccompare.rendering.pdf_pipeline import produce_pdf
 
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    tmp_docx = Path(tmpdir) / "tracked.docx"
+                set_status("Jämför dokument…")
+                doc_tree, summary = ooxml_compare(
+                    self.original_path, self.modified_path, None,
+                )
 
-                    set_status("Jämför dokument (OOXML-diff)…")
-                    _, summary = ooxml_compare(
-                        self.original_path, self.modified_path, tmp_docx,
-                    )
-
-                    set_status("Konverterar till PDF via Word…")
-                    produce_pdf(
-                        tmp_docx, output, summary,
-                        original_name=self.original_path.name,
-                        modified_name=self.modified_path.name,
-                    )
+                set_status("Renderar PDF…")
+                produce_pdf(
+                    doc_tree, output, summary,
+                    original_name=self.original_path.name,
+                    modified_name=self.modified_path.name,
+                )
 
                 s = summary
                 msg = (
