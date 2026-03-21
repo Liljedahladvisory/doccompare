@@ -81,42 +81,90 @@ def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
     )
 
 
-def _element_formatting(elem: DocumentElement) -> set:
-    """Get the union of all formatting across an element's runs."""
-    fmt = set()
+def _build_run_intervals(elem: DocumentElement) -> list:
+    """Returns [(start, end, formatting)] for each run, by character position."""
+    intervals = []
+    pos = 0
     for run in elem.runs:
-        fmt |= run.formatting
-    return fmt
+        if run.text:
+            intervals.append((pos, pos + len(run.text), run.formatting))
+            pos += len(run.text)
+    return intervals
+
+
+def _fmt_at(abs_pos: int, intervals: list) -> set:
+    """Return formatting at absolute character position."""
+    for start, end, fmt in intervals:
+        if start <= abs_pos < end:
+            return fmt
+    return intervals[-1][2] if intervals else set()
+
+
+def _split_with_fmt(text: str, text_start: int, intervals: list, diff_type: DiffType) -> list:
+    """Split text into DiffSegments at run boundaries, preserving exact formatting."""
+    segments = []
+    offset = 0
+    while offset < len(text):
+        abs_pos = text_start + offset
+        fmt = _fmt_at(abs_pos, intervals)
+        # Find where this run ends
+        run_end_abs = text_start + len(text)  # fallback: rest of text
+        for start, end, _ in intervals:
+            if start <= abs_pos < end:
+                run_end_abs = end
+                break
+        chunk_end = min(run_end_abs - text_start, len(text))
+        chunk = text[offset:chunk_end]
+        if not chunk:
+            break
+        segments.append(DiffSegment(diff_type=diff_type, text=chunk, original_formatting=fmt))
+        offset = chunk_end
+    if not segments:
+        segments = [DiffSegment(diff_type=diff_type, text=text)]
+    return segments
 
 
 def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffElement:
-    """Character-level diff within two matched elements, preserving formatting."""
+    """Character-level diff preserving exact per-run formatting from each document."""
     orig_text = orig.plain_text
     mod_text = mod.plain_text
-    orig_fmt = _element_formatting(orig)
-    mod_fmt = _element_formatting(mod)
+    orig_intervals = _build_run_intervals(orig)
+    mod_intervals = _build_run_intervals(mod)
 
     if orig_text == mod_text:
-        segment = DiffSegment(diff_type=DiffType.UNCHANGED, text=orig_text, original_formatting=mod_fmt)
+        # Identical text: emit one segment per run of the modified document
+        segments = []
+        for start, end, fmt in mod_intervals:
+            chunk = mod_text[start:end]
+            if chunk:
+                segments.append(DiffSegment(diff_type=DiffType.UNCHANGED, text=chunk, original_formatting=fmt))
+        if not segments:
+            segments = [DiffSegment(diff_type=DiffType.UNCHANGED, text=orig_text)]
         return DiffElement(
             element_type=orig.element_type,
             level=orig.level,
-            segments=[segment],
+            segments=segments,
             diff_type=DiffType.UNCHANGED,
         )
 
     raw_diffs = _diff_chars(orig_text, mod_text)
     segments = []
     has_changes = False
+    orig_pos = 0
+    mod_pos = 0
 
     for op, text in raw_diffs:
-        if op == 0:
-            segments.append(DiffSegment(diff_type=DiffType.UNCHANGED, text=text, original_formatting=mod_fmt))
-        elif op == 1:
-            segments.append(DiffSegment(diff_type=DiffType.ADDED, text=text, original_formatting=mod_fmt))
+        if op == 0:   # unchanged — use mod formatting
+            segments.extend(_split_with_fmt(text, mod_pos, mod_intervals, DiffType.UNCHANGED))
+            orig_pos += len(text)
+            mod_pos += len(text)
+        elif op == 1:  # added — use mod formatting
+            segments.extend(_split_with_fmt(text, mod_pos, mod_intervals, DiffType.ADDED))
+            mod_pos += len(text)
             has_changes = True
-        elif op == -1:
-            segments.append(DiffSegment(diff_type=DiffType.DELETED, text=text, original_formatting=orig_fmt))
+        elif op == -1:  # deleted — use orig formatting
+            segments.extend(_split_with_fmt(text, orig_pos, orig_intervals, DiffType.DELETED))
+            orig_pos += len(text)
             has_changes = True
 
     diff_type = DiffType.MODIFIED if has_changes else DiffType.UNCHANGED
