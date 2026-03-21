@@ -76,7 +76,7 @@ class DocCompareApp:
         # ── App title ─────────────────────────────────────────────────────
         tk.Label(outer, text="DocCompare", font=(FONT, 22, "bold"), bg=BG, fg=FG).pack(anchor="w")
         tk.Label(
-            outer, text="Jämför två dokument och generera en PDF-rapport",
+            outer, text="Jämför två dokument och generera Track Changes",
             font=(FONT, 12), bg=BG, fg=SUBTITLE,
         ).pack(anchor="w", pady=(2, 22))
 
@@ -146,7 +146,7 @@ class DocCompareApp:
     def _pick_original(self):
         path = filedialog.askopenfilename(
             title="Välj originaldokument",
-            filetypes=[("Dokument", "*.docx *.pdf"), ("Word", "*.docx"), ("PDF", "*.pdf")],
+            filetypes=[("Word", "*.docx")],
         )
         if path:
             self.original_path = Path(path)
@@ -156,7 +156,7 @@ class DocCompareApp:
     def _pick_modified(self):
         path = filedialog.askopenfilename(
             title="Välj modifierat dokument",
-            filetypes=[("Dokument", "*.docx *.pdf"), ("Word", "*.docx"), ("PDF", "*.pdf")],
+            filetypes=[("Word", "*.docx")],
         )
         if path:
             self.modified_path = Path(path)
@@ -166,8 +166,8 @@ class DocCompareApp:
     def _pick_output(self):
         path = filedialog.asksaveasfilename(
             title="Spara rapport",
-            defaultextension=".pdf",
-            filetypes=[("PDF", "*.pdf")],
+            defaultextension=".docx",
+            filetypes=[("Word", "*.docx")],
             initialdir=Path.home() / "Desktop",
         )
         if path:
@@ -180,7 +180,7 @@ class DocCompareApp:
 
     def _default_output(self) -> Path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Path.home() / "Desktop" / f"comparison_{ts}.pdf"
+        return Path.home() / "Desktop" / f"comparison_{ts}.docx"
 
     def _run_comparison(self):
         self.compare_btn.config(state="disabled")
@@ -192,35 +192,12 @@ class DocCompareApp:
 
         def worker():
             try:
-                from doccompare.parsers import get_parser
-                from doccompare.comparison.differ import Differ
-                from doccompare.comparison.move_detector import MoveDetector
-                from doccompare.rendering.html_builder import HtmlBuilder
-                from doccompare.rendering.pdf_renderer import render_pdf
+                from doccompare.comparison.ooxml_engine import compare as ooxml_compare
 
-                css_path = Path(__file__).parent / "rendering" / "styles.css"
+                set_status("Jämför dokument…")
+                ooxml_compare(self.original_path, self.modified_path, output)
 
-                set_status("Läser originaldokument…")
-                orig_doc = get_parser(self.original_path).parse(self.original_path)
-
-                set_status("Läser modifierat dokument…")
-                mod_doc = get_parser(self.modified_path).parse(self.modified_path)
-
-                set_status("Analyserar skillnader…")
-                result = Differ().compare(orig_doc, mod_doc)
-                result = MoveDetector().detect(result)
-
-                set_status("Genererar PDF-rapport…")
-                html_content = HtmlBuilder().build(result, self.original_path, self.modified_path)
-                render_pdf(html_content, css_path, output)
-
-                s = result.summary
-                msg = (
-                    f"Klar! Rapport sparad: {output.name}\n"
-                    f"+{s.get('added_words', 0)} tillagda  "
-                    f"−{s.get('deleted_words', 0)} borttagna  "
-                    f"~{s.get('moved_words', 0)} flyttade ord"
-                )
+                msg = f"Klar! Rapport sparad: {output.name}\nÖppna i Word för att granska ändringar."
                 self.root.after(0, lambda: self._on_success(msg, output))
 
             except Exception as e:
