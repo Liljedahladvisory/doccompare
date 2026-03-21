@@ -159,17 +159,20 @@ class DocxParser(DocumentParser):
     def _parse_paragraph(self, para, element_id: str, doc=None) -> "DocumentElement | None":
         style_name = para.style.name if para.style else "Normal"
 
-        # Check for DOCX numbering via w:numPr (applies to headings AND paragraphs)
+        # Check for DOCX numbering via w:numPr — on paragraph AND style chain
         list_style = ""
         list_numid = 0
         list_lvl_text = ""
         list_ilvl = 0
-        pPr = para._p.find(qn('w:pPr'))
-        numPr = pPr.find(qn('w:numPr')) if pPr is not None else None
         has_numbering = False
-        if numPr is not None:
-            ilvl_el = numPr.find(qn('w:ilvl'))
-            numId_el = numPr.find(qn('w:numId'))
+
+        def _extract_numPr(numPr_el):
+            """Extract numbering info from a w:numPr element."""
+            nonlocal has_numbering, list_numid, list_ilvl, list_style, list_lvl_text
+            if numPr_el is None:
+                return False
+            ilvl_el = numPr_el.find(qn('w:ilvl'))
+            numId_el = numPr_el.find(qn('w:numId'))
             if ilvl_el is not None and numId_el is not None:
                 numid = int(numId_el.get(qn('w:val'), 0))
                 if numid != 0:
@@ -180,6 +183,24 @@ class DocxParser(DocumentParser):
                     info = self._get_list_info(doc, numid, ilvl) if doc is not None else {}
                     list_style = info.get('num_fmt', 'bullet')
                     list_lvl_text = info.get('lvl_text', '')
+                    return True
+            return False
+
+        # 1) Check direct paragraph w:numPr
+        pPr = para._p.find(qn('w:pPr'))
+        numPr = pPr.find(qn('w:numPr')) if pPr is not None else None
+        if not _extract_numPr(numPr):
+            # 2) Walk style chain for w:numPr (style-linked numbering)
+            style = para.style
+            while style and not has_numbering:
+                try:
+                    style_pPr = style.element.find(qn('w:pPr'))
+                    if style_pPr is not None:
+                        style_numPr = style_pPr.find(qn('w:numPr'))
+                        _extract_numPr(style_numPr)
+                except Exception:
+                    pass
+                style = style.base_style
 
         # Determine element type — check style name, then outlineLvl for headings
         if style_name in HEADING_STYLES:
