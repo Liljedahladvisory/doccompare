@@ -37,6 +37,14 @@ class DocumentElement:
     list_style: str = ""
     list_numid: int = 0
     list_lvl_text: str = ""
+    # Paragraph-level formatting
+    alignment: Optional[str] = None          # "left", "center", "right", "justify"
+    left_indent_pt: Optional[float] = None   # points
+    right_indent_pt: Optional[float] = None  # points
+    first_line_indent_pt: Optional[float] = None  # points (negative = hanging)
+    space_before_pt: Optional[float] = None  # points
+    space_after_pt: Optional[float] = None   # points
+    line_spacing: Optional[float] = None     # multiplier (1.0, 1.5, 2.0 etc)
 
     @property
     def plain_text(self) -> str:
@@ -65,6 +73,7 @@ class DiffSegment:
     original_formatting: set = field(default_factory=set)
     move_id: Optional[str] = None
     font_size: Optional[float] = None
+    font_name: Optional[str] = None
 
 
 @dataclass
@@ -76,6 +85,14 @@ class DiffElement:
     list_style: str = ""
     list_numid: int = 0
     list_lvl_text: str = ""
+    # Paragraph-level formatting (from modified document)
+    alignment: Optional[str] = None
+    left_indent_pt: Optional[float] = None
+    right_indent_pt: Optional[float] = None
+    first_line_indent_pt: Optional[float] = None
+    space_before_pt: Optional[float] = None
+    space_after_pt: Optional[float] = None
+    line_spacing: Optional[float] = None
 
 
 @dataclass

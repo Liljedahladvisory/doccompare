@@ -148,6 +148,22 @@ class DocxParser(DocumentParser):
         if not runs and elem_type == ElementType.PARAGRAPH:
             return None
 
+        # Extract paragraph-level formatting
+        pf = para.paragraph_format
+        alignment = None
+        if pf.alignment is not None:
+            _align_map = {0: "left", 1: "center", 2: "right", 3: "justify"}
+            alignment = _align_map.get(pf.alignment, None)
+
+        def _to_pt(length):
+            """Convert a docx Length to points, or None."""
+            if length is None:
+                return None
+            try:
+                return float(length.pt)
+            except Exception:
+                return None
+
         return DocumentElement(
             element_type=elem_type,
             runs=runs,
@@ -156,6 +172,13 @@ class DocxParser(DocumentParser):
             list_style=list_style,
             list_numid=list_numid,
             list_lvl_text=list_lvl_text,
+            alignment=alignment,
+            left_indent_pt=_to_pt(pf.left_indent),
+            right_indent_pt=_to_pt(pf.right_indent),
+            first_line_indent_pt=_to_pt(pf.first_line_indent),
+            space_before_pt=_to_pt(pf.space_before),
+            space_after_pt=_to_pt(pf.space_after),
+            line_spacing=float(pf.line_spacing) if pf.line_spacing is not None else None,
         )
 
     def _parse_table(self, table, table_id: str) -> list:

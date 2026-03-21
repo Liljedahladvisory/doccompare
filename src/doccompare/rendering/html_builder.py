@@ -77,6 +77,26 @@ class HtmlBuilder:
 </body>
 </html>"""
 
+    @staticmethod
+    def _para_style(elem: DiffElement) -> str:
+        """Build an inline CSS style string from paragraph-level formatting."""
+        parts = []
+        if elem.alignment:
+            parts.append(f"text-align:{elem.alignment}")
+        if elem.left_indent_pt:
+            parts.append(f"margin-left:{elem.left_indent_pt:.1f}pt")
+        if elem.right_indent_pt:
+            parts.append(f"margin-right:{elem.right_indent_pt:.1f}pt")
+        if elem.first_line_indent_pt:
+            parts.append(f"text-indent:{elem.first_line_indent_pt:.1f}pt")
+        if elem.space_before_pt:
+            parts.append(f"margin-top:{elem.space_before_pt:.1f}pt")
+        if elem.space_after_pt:
+            parts.append(f"margin-bottom:{elem.space_after_pt:.1f}pt")
+        if elem.line_spacing and elem.line_spacing != 1.0:
+            parts.append(f"line-height:{elem.line_spacing:.2f}")
+        return "; ".join(parts)
+
     def _render_element(self, elem: DiffElement) -> str:
         elem_class = ""
         if elem.diff_type == DiffType.ADDED:
@@ -85,16 +105,18 @@ class HtmlBuilder:
             elem_class = "element-deleted"
 
         inner = self._render_segments(elem.segments)
+        pstyle = self._para_style(elem)
+        style_attr = f' style="{pstyle}"' if pstyle else ""
 
         if elem.element_type == ElementType.HEADING:
             level = max(1, min(6, elem.level or 1))
-            return f'<h{level} class="{elem_class}">{inner}</h{level}>'
+            return f'<h{level} class="{elem_class}"{style_attr}>{inner}</h{level}>'
         elif elem.element_type == ElementType.LIST_ITEM:
-            return f'<p class="list-item {elem_class}">&#8226; {inner}</p>'
+            return f'<p class="list-item {elem_class}"{style_attr}>&#8226; {inner}</p>'
         elif elem.element_type == ElementType.TABLE_ROW:
             cells_html = "".join(
                 f"<td>{html.escape(c.plain_text)}</td>"
-                for c in elem.segments  # reusing segments field for table rows is unusual; handle gracefully
+                for c in elem.segments
             )
             return f'<tr class="{elem_class}">{cells_html}</tr>'
         elif elem.element_type == ElementType.PAGE_BREAK:
@@ -102,7 +124,7 @@ class HtmlBuilder:
         else:
             if not inner.strip():
                 return ""
-            return f'<p class="{elem_class}">{inner}</p>'
+            return f'<p class="{elem_class}"{style_attr}>{inner}</p>'
 
     def _render_segments(self, segments: list) -> str:
         from doccompare.models import TextFormatting
@@ -117,7 +139,13 @@ class HtmlBuilder:
             if TextFormatting.UNDERLINE in fmt:
                 escaped = f"<u>{escaped}</u>"
             css = CSS_CLASSES.get(seg.diff_type, "")
-            style = f' style="font-size:{seg.font_size:.1f}pt"' if seg.font_size else ""
+            # Build inline style from run-level properties
+            style_parts = []
+            if seg.font_size:
+                style_parts.append(f"font-size:{seg.font_size:.1f}pt")
+            if seg.font_name:
+                style_parts.append(f"font-family:'{seg.font_name}', serif")
+            style = f' style="{"; ".join(style_parts)}"' if style_parts else ""
             if css or style:
                 parts.append(f'<span class="{css}"{style}>{escaped}</span>')
             else:
@@ -228,10 +256,20 @@ class HtmlBuilder:
                     elem_class = "element-deleted"
 
                 inner = self._render_segments(elem.segments)
-                indent = elem.level * 20
+                # Use document indentation if available, else fallback to level-based
+                indent = elem.left_indent_pt if elem.left_indent_pt else elem.level * 20
+                pstyle = self._para_style(elem)
+                # Override margin-left with list indent
+                li_style = f"margin-left:{indent:.1f}pt;padding-left:4pt"
+                if elem.space_before_pt:
+                    li_style += f";margin-top:{elem.space_before_pt:.1f}pt"
+                if elem.space_after_pt:
+                    li_style += f";margin-bottom:{elem.space_after_pt:.1f}pt"
+                if elem.alignment:
+                    li_style += f";text-align:{elem.alignment}"
                 class_attr = f' class="{elem_class}"' if elem_class else ''
                 parts.append(
-                    f'<li{class_attr} style="margin-left:{indent}pt;padding-left:4pt">'
+                    f'<li{class_attr} style="{li_style}">'
                     f'<span class="list-marker">{html.escape(label)}&nbsp;</span>{inner}</li>'
                 )
             else:
