@@ -34,7 +34,7 @@ class DocxParser(DocumentParser):
             tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
             if tag == "p":
                 para = docx.text.paragraph.Paragraph(child, doc)
-                elem = self._parse_paragraph(para, f"p_{para_idx}")
+                elem = self._parse_paragraph(para, f"p_{para_idx}", doc)
                 if elem is not None:
                     elements.append(elem)
                 para_idx += 1
@@ -52,19 +52,65 @@ class DocxParser(DocumentParser):
 
         return ParsedDocument(elements=elements, metadata=metadata)
 
-    def _parse_paragraph(self, para, element_id: str) -> "DocumentElement | None":
+    def _get_num_fmt(self, doc, num_id: int, ilvl: int) -> str:
+        try:
+            np = doc.part.numbering_part
+            if np is None:
+                return 'bullet'
+            nxml = np._element
+            for num in nxml.findall(qn('w:num')):
+                if num.get(qn('w:numId')) == str(num_id):
+                    abid_el = num.find(qn('w:abstractNumId'))
+                    if abid_el is None:
+                        continue
+                    abid = abid_el.get(qn('w:val'))
+                    for ab in nxml.findall(qn('w:abstractNum')):
+                        if ab.get(qn('w:abstractNumId')) == abid:
+                            for lvl in ab.findall(qn('w:lvl')):
+                                if lvl.get(qn('w:ilvl')) == str(ilvl):
+                                    nf = lvl.find(qn('w:numFmt'))
+                                    if nf is not None:
+                                        return nf.get(qn('w:val'), 'bullet')
+        except Exception:
+            pass
+        return 'bullet'
+
+    def _parse_paragraph(self, para, element_id: str, doc=None) -> "DocumentElement | None":
         style_name = para.style.name if para.style else "Normal"
 
         # Determine element type
+        list_style = ""
+        list_numid = 0
         if style_name in HEADING_STYLES:
             elem_type = ElementType.HEADING
             level = HEADING_STYLES[style_name]
-        elif any(s in style_name for s in LIST_STYLES) or "List" in style_name:
-            elem_type = ElementType.LIST_ITEM
-            level = 0
         else:
-            elem_type = ElementType.PARAGRAPH
-            level = 0
+            # Check for DOCX numbering via w:numPr
+            pPr = para._p.find(qn('w:pPr'))
+            numPr = pPr.find(qn('w:numPr')) if pPr is not None else None
+            if numPr is not None:
+                ilvl_el = numPr.find(qn('w:ilvl'))
+                numId_el = numPr.find(qn('w:numId'))
+                if ilvl_el is not None and numId_el is not None:
+                    ilvl = int(ilvl_el.get(qn('w:val'), 0))
+                    numid = int(numId_el.get(qn('w:val'), 0))
+                    if numid != 0:
+                        elem_type = ElementType.LIST_ITEM
+                        level = ilvl
+                        list_numid = numid
+                        list_style = self._get_num_fmt(doc, numid, ilvl) if doc is not None else 'bullet'
+                    else:
+                        elem_type = ElementType.PARAGRAPH
+                        level = 0
+                else:
+                    elem_type = ElementType.PARAGRAPH
+                    level = 0
+            elif any(s in style_name for s in LIST_STYLES) or "List" in style_name:
+                elem_type = ElementType.LIST_ITEM
+                level = 0
+            else:
+                elem_type = ElementType.PARAGRAPH
+                level = 0
 
         runs = []
         for run in para.runs:
@@ -95,6 +141,8 @@ class DocxParser(DocumentParser):
             runs=runs,
             level=level,
             element_id=element_id,
+            list_style=list_style,
+            list_numid=list_numid,
         )
 
     def _parse_table(self, table, table_id: str) -> list:

@@ -34,6 +34,8 @@ class DocumentElement:
     level: int = 0
     element_id: str = ""
     children: list = field(default_factory=list)
+    list_style: str = ""
+    list_numid: int = 0
 
     @property
     def plain_text(self) -> str:
@@ -61,6 +63,7 @@ class DiffSegment:
     text: str
     original_formatting: set = field(default_factory=set)
     move_id: Optional[str] = None
+    font_size: Optional[float] = None
 
 
 @dataclass
@@ -69,6 +72,8 @@ class DiffElement:
     level: int = 0
     segments: list = field(default_factory=list)
     diff_type: DiffType = DiffType.UNCHANGED
+    list_style: str = ""
+    list_numid: int = 0
 
 
 @dataclass

@@ -58,8 +58,7 @@ class HtmlBuilder:
 
         body_parts = [header]
 
-        for elem in result.diff_elements:
-            body_parts.append(self._render_element(elem))
+        body_parts.append(self._render_all_elements(result.diff_elements))
 
         body_parts.append(summary_box)
         body_parts.append(legend)
@@ -111,7 +110,6 @@ class HtmlBuilder:
         parts = []
         for seg in segments:
             escaped = html.escape(seg.text)
-            # Apply formatting from the modified document
             fmt = seg.original_formatting
             if TextFormatting.BOLD in fmt:
                 escaped = f"<strong>{escaped}</strong>"
@@ -120,8 +118,87 @@ class HtmlBuilder:
             if TextFormatting.UNDERLINE in fmt:
                 escaped = f"<u>{escaped}</u>"
             css = CSS_CLASSES.get(seg.diff_type, "")
-            if css:
-                parts.append(f'<span class="{css}">{escaped}</span>')
+            style = f' style="font-size:{seg.font_size:.1f}pt"' if seg.font_size else ""
+            if css or style:
+                parts.append(f'<span class="{css}"{style}>{escaped}</span>')
             else:
                 parts.append(escaped)
         return "".join(parts)
+
+    _LIST_TYPE_MAP = {
+        'decimal': '1',
+        'lowerLetter': 'a',
+        'upperLetter': 'A',
+        'lowerRoman': 'i',
+        'upperRoman': 'I',
+    }
+
+    def _render_all_elements(self, diff_elements: list) -> str:
+        parts = []
+        in_list = False
+        current_numid = None
+
+        def close_list():
+            nonlocal in_list, current_numid
+            if in_list:
+                parts.append("</ul>" if _last_list_style in ('bullet', '') else "</ol>")
+                in_list = False
+                current_numid = None
+
+        _last_list_style = ''
+
+        for elem in diff_elements:
+            if elem.element_type == ElementType.LIST_ITEM:
+                list_style = elem.list_style or ''
+                numid = elem.list_numid
+
+                # Close existing list if numid changed
+                if in_list and numid != current_numid:
+                    if list_style in ('bullet', ''):
+                        parts.append("</ul>")
+                    else:
+                        parts.append("</ol>")
+                    in_list = False
+                    current_numid = None
+
+                # Open new list if not in one
+                if not in_list:
+                    _last_list_style = list_style
+                    if list_style in ('bullet', ''):
+                        parts.append("<ul>")
+                    else:
+                        ol_type = self._LIST_TYPE_MAP.get(list_style, '1')
+                        parts.append(f'<ol type="{ol_type}">')
+                    in_list = True
+                    current_numid = numid
+                else:
+                    _last_list_style = list_style
+
+                elem_class = ""
+                if elem.diff_type == DiffType.ADDED:
+                    elem_class = "element-added"
+                elif elem.diff_type == DiffType.DELETED:
+                    elem_class = "element-deleted"
+
+                inner = self._render_segments(elem.segments)
+                margin = elem.level * 20
+                class_attr = f' class="{elem_class}"' if elem_class else ''
+                parts.append(f'<li{class_attr} style="margin-left:{margin}pt">{inner}</li>')
+            else:
+                if in_list:
+                    if _last_list_style in ('bullet', ''):
+                        parts.append("</ul>")
+                    else:
+                        parts.append("</ol>")
+                    in_list = False
+                    current_numid = None
+
+                parts.append(self._render_element(elem))
+
+        if in_list:
+            if _last_list_style in ('bullet', ''):
+                parts.append("</ul>")
+            else:
+                parts.append("</ol>")
+
+        return "\n".join(parts)

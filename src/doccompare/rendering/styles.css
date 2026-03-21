@@ -111,11 +111,29 @@ p {
     widows: 3;
 }
 
-/* List items */
-p.list-item {
-    margin-left: 16pt;
-    text-indent: -8pt;
+/* List containers */
+ul, ol {
+    margin-top: 0;
+    margin-bottom: 8pt;
+    padding-left: 20pt;
+}
+
+li {
+    margin-bottom: 4pt;
+    orphans: 3;
+    widows: 3;
+}
+
+li.element-added {
+    border-left: 3pt solid #0047ab;
     padding-left: 8pt;
+    margin-left: -11pt;
+}
+
+li.element-deleted {
+    border-left: 3pt solid #c0392b;
+    padding-left: 8pt;
+    margin-left: -11pt;
 }
 
 /* =========================================================

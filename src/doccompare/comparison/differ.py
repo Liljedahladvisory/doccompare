@@ -139,6 +139,7 @@ def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
                 diff_type=diff_type,
                 text=run.text,
                 original_formatting=run.formatting,
+                font_size=run.font_size,
             ))
     if not segments:
         segments = [DiffSegment(diff_type=diff_type, text=elem.plain_text)]
@@ -147,26 +148,30 @@ def _element_to_diff(elem: DocumentElement, diff_type: DiffType) -> DiffElement:
         level=elem.level,
         segments=segments,
         diff_type=diff_type,
+        list_style=elem.list_style,
+        list_numid=elem.list_numid,
     )
 
 
 def _build_run_intervals(elem: DocumentElement) -> list:
-    """Returns [(start, end, formatting)] for each run, by character position."""
+    """Returns [(start, end, formatting, font_size)] for each run, by character position."""
     intervals = []
     pos = 0
     for run in elem.runs:
         if run.text:
-            intervals.append((pos, pos + len(run.text), run.formatting))
+            intervals.append((pos, pos + len(run.text), run.formatting, run.font_size))
             pos += len(run.text)
     return intervals
 
 
-def _fmt_at(abs_pos: int, intervals: list) -> set:
-    """Return formatting at absolute character position."""
-    for start, end, fmt in intervals:
+def _run_at(abs_pos: int, intervals: list):
+    """Return (formatting, font_size) at absolute character position."""
+    for start, end, fmt, fs in intervals:
         if start <= abs_pos < end:
-            return fmt
-    return intervals[-1][2] if intervals else set()
+            return fmt, fs
+    if intervals:
+        return intervals[-1][2], intervals[-1][3]
+    return set(), None
 
 
 def _split_with_fmt(text: str, text_start: int, intervals: list, diff_type: DiffType) -> list:
@@ -175,10 +180,10 @@ def _split_with_fmt(text: str, text_start: int, intervals: list, diff_type: Diff
     offset = 0
     while offset < len(text):
         abs_pos = text_start + offset
-        fmt = _fmt_at(abs_pos, intervals)
+        fmt, font_size = _run_at(abs_pos, intervals)
         # Find where this run ends
         run_end_abs = text_start + len(text)  # fallback: rest of text
-        for start, end, _ in intervals:
+        for start, end, _, _fs in intervals:
             if start <= abs_pos < end:
                 run_end_abs = end
                 break
@@ -186,7 +191,7 @@ def _split_with_fmt(text: str, text_start: int, intervals: list, diff_type: Diff
         chunk = text[offset:chunk_end]
         if not chunk:
             break
-        segments.append(DiffSegment(diff_type=diff_type, text=chunk, original_formatting=fmt))
+        segments.append(DiffSegment(diff_type=diff_type, text=chunk, original_formatting=fmt, font_size=font_size))
         offset = chunk_end
     if not segments:
         segments = [DiffSegment(diff_type=diff_type, text=text)]
@@ -203,10 +208,10 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
     if orig_text == mod_text:
         # Identical text: emit one segment per run of the modified document
         segments = []
-        for start, end, fmt in mod_intervals:
+        for start, end, fmt, font_size in mod_intervals:
             chunk = mod_text[start:end]
             if chunk:
-                segments.append(DiffSegment(diff_type=DiffType.UNCHANGED, text=chunk, original_formatting=fmt))
+                segments.append(DiffSegment(diff_type=DiffType.UNCHANGED, text=chunk, original_formatting=fmt, font_size=font_size))
         if not segments:
             segments = [DiffSegment(diff_type=DiffType.UNCHANGED, text=orig_text)]
         return DiffElement(
@@ -214,6 +219,8 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
             level=orig.level,
             segments=segments,
             diff_type=DiffType.UNCHANGED,
+            list_style=mod.list_style,
+            list_numid=mod.list_numid,
         )
 
     raw_diffs = _diff_hybrid(orig_text, mod_text)
@@ -242,6 +249,8 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
         level=orig.level,
         segments=segments,
         diff_type=diff_type,
+        list_style=mod.list_style,
+        list_numid=mod.list_numid,
     )
 
 
