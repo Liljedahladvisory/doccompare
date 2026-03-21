@@ -134,11 +134,23 @@ def _diff_hybrid(original: str, modified: str) -> list:
     - Changed whitespace/punctuation: DELETE old + INSERT new
     - Changed word pair with similarity >= threshold: char-level sub-diff
     - Changed word pair below threshold: full word DELETE + INSERT
+
+    For long texts that exceed the token-LCS cap, falls back to
+    diff_match_patch directly (efficient Myers diff on the full strings).
     """
     from rapidfuzz import fuzz
 
     orig_tokens = _tokenize(original)
     mod_tokens = _tokenize(modified)
+
+    # For long texts, skip token-level LCS entirely and use diff_match_patch
+    # which implements an efficient O(ND) Myers algorithm
+    if len(orig_tokens) * len(mod_tokens) > 40000:
+        dmp = dmp_module.diff_match_patch()
+        diffs = dmp.diff_main(original, modified)
+        dmp.diff_cleanupSemantic(diffs)
+        return diffs
+
     token_ops = _lcs_token_ops(orig_tokens, mod_tokens)
 
     result = []
