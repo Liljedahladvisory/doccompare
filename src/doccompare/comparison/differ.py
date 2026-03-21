@@ -272,6 +272,149 @@ def _diff_matched_elements(orig: DocumentElement, mod: DocumentElement) -> DiffE
     )
 
 
+def _rematch_adjacent(diff_elements: list, orig_elems: list, mod_elems: list) -> list:
+    """Post-processing: find adjacent DELETE+ADD blocks and re-match similar pairs as inline diffs.
+
+    The LCS algorithm sometimes misses locally optimal matches because it optimizes globally.
+    This pass finds contiguous runs of DELETED elements followed by ADDED elements, computes
+    pairwise similarity, and converts high-similarity pairs into inline diffs.
+    """
+    result = []
+    i = 0
+    while i < len(diff_elements):
+        # Collect a contiguous block of DELETED elements
+        deleted_block = []
+        while i < len(diff_elements) and diff_elements[i].diff_type == DiffType.DELETED:
+            deleted_block.append(diff_elements[i])
+            i += 1
+
+        # Collect a contiguous block of ADDED elements right after
+        added_block = []
+        while i < len(diff_elements) and diff_elements[i].diff_type == DiffType.ADDED:
+            added_block.append(diff_elements[i])
+            i += 1
+
+        if not deleted_block and not added_block:
+            # Not a delete/add block — just pass through
+            result.append(diff_elements[i])
+            i += 1
+            continue
+
+        if not deleted_block or not added_block:
+            # Only deletes or only adds — no re-matching possible
+            result.extend(deleted_block)
+            result.extend(added_block)
+            continue
+
+        # Try to match deleted elements with added elements by similarity
+        # Find the original DocumentElements for proper re-diffing
+        _rematch_blocks(deleted_block, added_block, result, orig_elems, mod_elems)
+
+    return result
+
+
+def _seg_plain_text(elem: DiffElement) -> str:
+    """Extract plain text from a DiffElement's segments."""
+    return "".join(seg.text for seg in elem.segments)
+
+
+def _find_orig_element(diff_elem: DiffElement, orig_elems: list) -> "DocumentElement | None":
+    """Find the original DocumentElement that corresponds to a deleted DiffElement."""
+    target_text = _seg_plain_text(diff_elem)
+    for elem in orig_elems:
+        if elem.plain_text == target_text and elem.element_type.value == diff_elem.element_type.value:
+            return elem
+    # Fallback: closest match
+    best, best_sim = None, 0.0
+    for elem in orig_elems:
+        if elem.element_type.value == diff_elem.element_type.value:
+            sim = _similarity(elem.plain_text, target_text)
+            if sim > best_sim:
+                best_sim = sim
+                best = elem
+    return best
+
+
+def _find_mod_element(diff_elem: DiffElement, mod_elems: list) -> "DocumentElement | None":
+    """Find the modified DocumentElement that corresponds to an added DiffElement."""
+    target_text = _seg_plain_text(diff_elem)
+    for elem in mod_elems:
+        if elem.plain_text == target_text and elem.element_type.value == diff_elem.element_type.value:
+            return elem
+    best, best_sim = None, 0.0
+    for elem in mod_elems:
+        if elem.element_type.value == diff_elem.element_type.value:
+            sim = _similarity(elem.plain_text, target_text)
+            if sim > best_sim:
+                best_sim = sim
+                best = elem
+    return best
+
+
+def _rematch_blocks(deleted_block: list, added_block: list, result: list,
+                    orig_elems: list, mod_elems: list):
+    """Match deleted and added elements by similarity and produce inline diffs for good matches."""
+    n_del = len(deleted_block)
+    n_add = len(added_block)
+
+    # Compute similarity matrix
+    sim_matrix = []
+    for d_idx in range(n_del):
+        row = []
+        d_text = _seg_plain_text(deleted_block[d_idx])
+        for a_idx in range(n_add):
+            a_text = _seg_plain_text(added_block[a_idx])
+            row.append(_similarity(d_text, a_text))
+        sim_matrix.append(row)
+
+    # Greedy matching: repeatedly pick the highest-similarity pair above threshold
+    THRESHOLD = 0.5
+    matched_del = set()
+    matched_add = set()
+    pairs = []  # (del_idx, add_idx)
+
+    while True:
+        best_sim = THRESHOLD
+        best_pair = None
+        for d_idx in range(n_del):
+            if d_idx in matched_del:
+                continue
+            for a_idx in range(n_add):
+                if a_idx in matched_add:
+                    continue
+                if sim_matrix[d_idx][a_idx] > best_sim:
+                    best_sim = sim_matrix[d_idx][a_idx]
+                    best_pair = (d_idx, a_idx)
+        if best_pair is None:
+            break
+        pairs.append(best_pair)
+        matched_del.add(best_pair[0])
+        matched_add.add(best_pair[1])
+
+    # Emit results in order of the added block (modified document order)
+    # First: unmatched deletes
+    for d_idx in range(n_del):
+        if d_idx not in matched_del:
+            result.append(deleted_block[d_idx])
+
+    # Then: added elements in order, replacing matched ones with inline diffs
+    for a_idx in range(n_add):
+        if a_idx not in matched_add:
+            result.append(added_block[a_idx])
+        else:
+            # Find the corresponding delete
+            d_idx = next(d for d, a in pairs if a == a_idx)
+            # Get original DocumentElements for proper formatting-aware diff
+            orig_doc_elem = _find_orig_element(deleted_block[d_idx], orig_elems)
+            mod_doc_elem = _find_mod_element(added_block[a_idx], mod_elems)
+            if orig_doc_elem and mod_doc_elem:
+                result.append(_diff_matched_elements(orig_doc_elem, mod_doc_elem))
+            else:
+                # Fallback: emit as-is
+                result.append(deleted_block[d_idx])
+                result.append(added_block[a_idx])
+
+
 class Differ:
     def compare(self, original: ParsedDocument, modified: ParsedDocument) -> ComparisonResult:
         orig_elems = original.elements
@@ -313,6 +456,9 @@ class Differ:
         while mod_ptr < len(mod_elems):
             diff_elements.append(_element_to_diff(mod_elems[mod_ptr], DiffType.ADDED))
             mod_ptr += 1
+
+        # Post-processing: re-match adjacent DELETE+ADD blocks as inline diffs
+        diff_elements = _rematch_adjacent(diff_elements, orig_elems, mod_elems)
 
         summary = self._compute_summary(diff_elements)
         return ComparisonResult(diff_elements=diff_elements, summary=summary)
