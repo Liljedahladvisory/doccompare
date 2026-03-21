@@ -19,6 +19,78 @@ HEADING_STYLES = {
 LIST_STYLES = {"List Bullet", "List Number", "List Paragraph", "List Continue"}
 
 
+def _to_pt(length):
+    """Convert a docx Length to points, or None."""
+    if length is None:
+        return None
+    try:
+        return float(length.pt)
+    except Exception:
+        return None
+
+
+def _effective_pf(para, attr):
+    """Get effective paragraph format value by walking the style chain."""
+    val = getattr(para.paragraph_format, attr, None)
+    if val is not None:
+        return val
+    style = para.style
+    while style:
+        val = getattr(style.paragraph_format, attr, None)
+        if val is not None:
+            return val
+        style = style.base_style
+    return None
+
+
+def _effective_font(run, para, attr):
+    """Get effective font value by walking run style → paragraph style chain."""
+    val = getattr(run.font, attr, None)
+    if val is not None:
+        return val
+    # Check run's character style
+    if run.style and run.style.font:
+        val = getattr(run.style.font, attr, None)
+        if val is not None:
+            return val
+    # Check paragraph style's font
+    style = para.style
+    while style:
+        if style.font:
+            val = getattr(style.font, attr, None)
+            if val is not None:
+                return val
+        style = style.base_style
+    return None
+
+
+def _detect_heading_level(para) -> int:
+    """Detect heading level from outlineLvl in paragraph or style XML."""
+    # Check direct paragraph properties
+    pPr = para._p.find(qn('w:pPr'))
+    if pPr is not None:
+        outlineLvl = pPr.find(qn('w:outlineLvl'))
+        if outlineLvl is not None:
+            try:
+                return int(outlineLvl.get(qn('w:val'), -1))
+            except (TypeError, ValueError):
+                pass
+    # Check style's XML for outlineLvl
+    style = para.style
+    while style:
+        try:
+            style_el = style.element
+            sPPr = style_el.find(qn('w:pPr'))
+            if sPPr is not None:
+                outlineLvl = sPPr.find(qn('w:outlineLvl'))
+                if outlineLvl is not None:
+                    return int(outlineLvl.get(qn('w:val'), -1))
+        except Exception:
+            pass
+        style = style.base_style
+    return -1
+
+
 class DocxParser(DocumentParser):
     def supports(self, file_path: Path) -> bool:
         return file_path.suffix.lower() == ".docx"
@@ -109,75 +181,90 @@ class DocxParser(DocumentParser):
                     list_style = info.get('num_fmt', 'bullet')
                     list_lvl_text = info.get('lvl_text', '')
 
-        # Determine element type
+        # Determine element type — check style name, then outlineLvl for headings
         if style_name in HEADING_STYLES:
             elem_type = ElementType.HEADING
             level = HEADING_STYLES[style_name]
-            # Headings keep their heading level; numbering info is carried separately
-        elif has_numbering:
-            elem_type = ElementType.LIST_ITEM
-            level = ilvl
-        elif any(s in style_name for s in LIST_STYLES) or "List" in style_name:
-            elem_type = ElementType.LIST_ITEM
-            level = 0
         else:
-            elem_type = ElementType.PARAGRAPH
-            level = 0
+            outline_lvl = _detect_heading_level(para)
+            if 0 <= outline_lvl <= 8:
+                elem_type = ElementType.HEADING
+                level = outline_lvl + 1  # outlineLvl is 0-based, heading levels are 1-based
+            elif has_numbering:
+                elem_type = ElementType.LIST_ITEM
+                level = ilvl
+            elif any(s in style_name for s in LIST_STYLES) or "List" in style_name:
+                elem_type = ElementType.LIST_ITEM
+                level = 0
+            else:
+                elem_type = ElementType.PARAGRAPH
+                level = 0
 
+        # Extract runs with effective formatting (walking style chain)
         runs = []
         for run in para.runs:
             if not run.text:
                 continue
             fmt = set()
-            if run.bold:
+            # Use effective values: check run → run style → paragraph style
+            if _effective_font(run, para, 'bold'):
                 fmt.add(TextFormatting.BOLD)
-            if run.italic:
+            if _effective_font(run, para, 'italic'):
                 fmt.add(TextFormatting.ITALIC)
             if run.underline:
                 fmt.add(TextFormatting.UNDERLINE)
             if run.font.strike:
                 fmt.add(TextFormatting.STRIKETHROUGH)
+
+            # Effective font name and size
+            font_name = _effective_font(run, para, 'name')
+            font_size_obj = _effective_font(run, para, 'size')
+            font_size = None
+            if font_size_obj is not None:
+                try:
+                    font_size = float(font_size_obj.pt)
+                except (AttributeError, TypeError):
+                    try:
+                        font_size = float(font_size_obj)
+                    except (TypeError, ValueError):
+                        pass
+
             runs.append(TextRun(
                 text=run.text,
                 formatting=fmt,
-                font_name=run.font.name,
-                font_size=float(run.font.size.pt) if run.font.size else None,
+                font_name=font_name,
+                font_size=font_size,
             ))
 
         # Skip completely empty paragraphs with no style significance
         if not runs and elem_type == ElementType.PARAGRAPH:
             return None
 
-        # Extract paragraph-level formatting
-        pf = para.paragraph_format
+        # Extract paragraph-level formatting with style chain fallback
         alignment = None
         try:
-            if pf.alignment is not None:
-                # pf.alignment is a WD_ALIGN_PARAGRAPH enum; use int() to get 0/1/2/3
+            align_val = _effective_pf(para, 'alignment')
+            if align_val is not None:
                 _align_map = {0: "left", 1: "center", 2: "right", 3: "justify"}
-                alignment = _align_map.get(int(pf.alignment), None)
+                alignment = _align_map.get(int(align_val), None)
         except (TypeError, ValueError):
             pass
 
-        def _to_pt(length):
-            """Convert a docx Length to points, or None."""
-            if length is None:
-                return None
-            try:
-                return float(length.pt)
-            except Exception:
-                return None
+        left_indent = _to_pt(_effective_pf(para, 'left_indent'))
+        right_indent = _to_pt(_effective_pf(para, 'right_indent'))
+        first_line_indent = _to_pt(_effective_pf(para, 'first_line_indent'))
+        space_before = _to_pt(_effective_pf(para, 'space_before'))
+        space_after = _to_pt(_effective_pf(para, 'space_after'))
 
-        # line_spacing can be a float multiplier (e.g. 1.15) or a Length object (EMU)
+        # line_spacing can be a float multiplier or a Length object
         line_spacing = None
         try:
-            ls = pf.line_spacing
+            ls = _effective_pf(para, 'line_spacing')
             if ls is not None:
                 val = float(ls)
                 if val > 10:
-                    # It's a Length in EMU — convert to approximate multiplier
-                    # (EMU / 12pt baseline ≈ 914400 EMU per inch, 72pt per inch)
-                    line_spacing = _to_pt(ls) / 12.0 if _to_pt(ls) else None
+                    pt_val = _to_pt(ls)
+                    line_spacing = pt_val / 12.0 if pt_val else None
                 else:
                     line_spacing = val
         except (TypeError, ValueError):
@@ -193,11 +280,11 @@ class DocxParser(DocumentParser):
             list_lvl_text=list_lvl_text,
             list_ilvl=list_ilvl,
             alignment=alignment,
-            left_indent_pt=_to_pt(pf.left_indent),
-            right_indent_pt=_to_pt(pf.right_indent),
-            first_line_indent_pt=_to_pt(pf.first_line_indent),
-            space_before_pt=_to_pt(pf.space_before),
-            space_after_pt=_to_pt(pf.space_after),
+            left_indent_pt=left_indent,
+            right_indent_pt=right_indent,
+            first_line_indent_pt=first_line_indent,
+            space_before_pt=space_before,
+            space_after_pt=space_after,
             line_spacing=line_spacing,
         )
 
