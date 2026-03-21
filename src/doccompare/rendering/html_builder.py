@@ -108,12 +108,7 @@ class HtmlBuilder:
         pstyle = self._para_style(elem)
         style_attr = f' style="{pstyle}"' if pstyle else ""
 
-        if elem.element_type == ElementType.HEADING:
-            level = max(1, min(6, elem.level or 1))
-            return f'<h{level} class="{elem_class}"{style_attr}>{inner}</h{level}>'
-        elif elem.element_type == ElementType.LIST_ITEM:
-            return f'<p class="list-item {elem_class}"{style_attr}>&#8226; {inner}</p>'
-        elif elem.element_type == ElementType.TABLE_ROW:
+        if elem.element_type == ElementType.TABLE_ROW:
             cells_html = "".join(
                 f"<td>{html.escape(c.plain_text)}</td>"
                 for c in elem.segments
@@ -122,6 +117,8 @@ class HtmlBuilder:
         elif elem.element_type == ElementType.PAGE_BREAK:
             return '<hr class="page-break">'
         else:
+            # Render everything (headings, list items, paragraphs) as <p>
+            # and let inline styles from the DOCX control appearance
             if not inner.strip():
                 return ""
             return f'<p class="{elem_class}"{style_attr}>{inner}</p>'
@@ -287,10 +284,10 @@ class HtmlBuilder:
                     inner = self._render_segments(elem.segments)
                     pstyle = self._para_style(elem)
                     style_attr = f' style="{pstyle}"' if pstyle else ""
-                    h_level = max(1, min(6, elem.level or 1))
+                    class_attr = f' class="{elem_class}"' if elem_class else ''
                     parts.append(
-                        f'<h{h_level} class="{elem_class}"{style_attr}>'
-                        f'<span class="list-marker">{html.escape(label)}&nbsp;</span>{inner}</h{h_level}>'
+                        f'<p{class_attr}{style_attr}>'
+                        f'<span class="list-marker">{html.escape(label)}&nbsp;</span>{inner}</p>'
                     )
                 else:
                     parts.append(self._render_element(elem))

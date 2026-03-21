@@ -77,21 +77,7 @@ body {
     color: #1a7a3f;
 }
 
-/* Headings */
-h1, h2, h3, h4, h5, h6 {
-    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-    color: #2c3e50;
-    margin-top: 18pt;
-    margin-bottom: 6pt;
-    page-break-after: avoid;
-}
-
-h1 { font-size: 18pt; font-weight: 700; border-bottom: 1px solid #bdc3c7; padding-bottom: 4pt; }
-h2 { font-size: 15pt; font-weight: 700; }
-h3 { font-size: 13pt; font-weight: 600; }
-h4 { font-size: 11pt; font-weight: 600; }
-h5 { font-size: 11pt; font-weight: 500; font-style: italic; }
-h6 { font-size: 10pt; font-weight: 500; color: #555; }
+/* Headings — no longer used; all elements render as <p> with inline styles */
 
 /* Paragraphs */
 p {
@@ -163,17 +149,13 @@ span.moved-from {
 }
 
 /* Whole-element border for heavily changed paragraphs (no background) */
-p.element-added,
-h1.element-added, h2.element-added, h3.element-added,
-h4.element-added, h5.element-added, h6.element-added {
+p.element-added {
     border-left: 3pt solid #0047ab;
     padding-left: 8pt;
     margin-left: -11pt;
 }
 
-p.element-deleted,
-h1.element-deleted, h2.element-deleted, h3.element-deleted,
-h4.element-deleted, h5.element-deleted, h6.element-deleted {
+p.element-deleted {
     border-left: 3pt solid #c0392b;
     padding-left: 8pt;
     margin-left: -11pt;
@@ -226,8 +208,8 @@ tr.element-deleted {
         break-inside: avoid;
     }
 
-    h1, h2, h3 {
-        break-after: avoid;
+    p {
+        break-after: auto;
     }
 
     p, li {
