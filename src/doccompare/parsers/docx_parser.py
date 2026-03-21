@@ -151,9 +151,13 @@ class DocxParser(DocumentParser):
         # Extract paragraph-level formatting
         pf = para.paragraph_format
         alignment = None
-        if pf.alignment is not None:
-            _align_map = {0: "left", 1: "center", 2: "right", 3: "justify"}
-            alignment = _align_map.get(pf.alignment, None)
+        try:
+            if pf.alignment is not None:
+                # pf.alignment is a WD_ALIGN_PARAGRAPH enum; use int() to get 0/1/2/3
+                _align_map = {0: "left", 1: "center", 2: "right", 3: "justify"}
+                alignment = _align_map.get(int(pf.alignment), None)
+        except (TypeError, ValueError):
+            pass
 
         def _to_pt(length):
             """Convert a docx Length to points, or None."""
@@ -163,6 +167,21 @@ class DocxParser(DocumentParser):
                 return float(length.pt)
             except Exception:
                 return None
+
+        # line_spacing can be a float multiplier (e.g. 1.15) or a Length object (EMU)
+        line_spacing = None
+        try:
+            ls = pf.line_spacing
+            if ls is not None:
+                val = float(ls)
+                if val > 10:
+                    # It's a Length in EMU — convert to approximate multiplier
+                    # (EMU / 12pt baseline ≈ 914400 EMU per inch, 72pt per inch)
+                    line_spacing = _to_pt(ls) / 12.0 if _to_pt(ls) else None
+                else:
+                    line_spacing = val
+        except (TypeError, ValueError):
+            pass
 
         return DocumentElement(
             element_type=elem_type,
@@ -179,7 +198,7 @@ class DocxParser(DocumentParser):
             first_line_indent_pt=_to_pt(pf.first_line_indent),
             space_before_pt=_to_pt(pf.space_before),
             space_after_pt=_to_pt(pf.space_after),
-            line_spacing=float(pf.line_spacing) if pf.line_spacing is not None else None,
+            line_spacing=line_spacing,
         )
 
     def _parse_table(self, table, table_id: str) -> list:
