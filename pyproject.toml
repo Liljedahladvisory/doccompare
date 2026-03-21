@@ -22,6 +22,7 @@ dependencies = [
 
 [project.scripts]
 doccompare = "doccompare.cli:compare"
+doccompare-gui = "doccompare.gui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/doccompare"]
