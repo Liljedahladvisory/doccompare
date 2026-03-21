@@ -54,10 +54,13 @@ class HtmlBuilder:
         </div>
         """
 
-        body_parts = [header, summary_box, legend]
+        body_parts = [header]
 
         for elem in result.diff_elements:
             body_parts.append(self._render_element(elem))
+
+        body_parts.append(summary_box)
+        body_parts.append(legend)
 
         body_html = "\n".join(body_parts)
 
@@ -101,9 +104,18 @@ class HtmlBuilder:
             return f'<p class="{elem_class}">{inner}</p>'
 
     def _render_segments(self, segments: list) -> str:
+        from doccompare.models import TextFormatting
         parts = []
         for seg in segments:
             escaped = html.escape(seg.text)
+            # Apply formatting from the modified document
+            fmt = seg.original_formatting
+            if TextFormatting.BOLD in fmt:
+                escaped = f"<strong>{escaped}</strong>"
+            if TextFormatting.ITALIC in fmt:
+                escaped = f"<em>{escaped}</em>"
+            if TextFormatting.UNDERLINE in fmt:
+                escaped = f"<u>{escaped}</u>"
             css = CSS_CLASSES.get(seg.diff_type, "")
             if css:
                 parts.append(f'<span class="{css}">{escaped}</span>')

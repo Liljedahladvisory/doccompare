@@ -135,9 +135,6 @@ span.added {
     color: #0047ab;
     text-decoration: underline;
     text-decoration-color: #0047ab;
-    background-color: #e8f0fe;
-    border-radius: 2pt;
-    padding: 0 1pt;
 }
 
 /* Deleted text: red + strikethrough */
@@ -145,18 +142,13 @@ span.deleted {
     color: #c0392b;
     text-decoration: line-through;
     text-decoration-color: #c0392b;
-    background-color: #fdecea;
-    border-radius: 2pt;
-    padding: 0 1pt;
 }
 
-/* Moved text — destination (new location): green */
+/* Moved text — destination (new location): green + underline */
 span.moved-to {
     color: #1a7a3f;
-    background-color: #e6f4ea;
-    border-bottom: 2px solid #1a7a3f;
-    border-radius: 2pt;
-    padding: 0 1pt;
+    text-decoration: underline;
+    text-decoration-color: #1a7a3f;
 }
 
 /* Moved text — origin (where it was): muted green + strikethrough */
@@ -164,17 +156,12 @@ span.moved-from {
     color: #2e7d52;
     text-decoration: line-through;
     text-decoration-color: #2e7d52;
-    background-color: #f0faf4;
-    border-radius: 2pt;
-    padding: 0 1pt;
-    opacity: 0.75;
 }
 
-/* Whole-element backgrounds for heavily changed paragraphs */
+/* Whole-element border for heavily changed paragraphs (no background) */
 p.element-added,
 h1.element-added, h2.element-added, h3.element-added,
 h4.element-added, h5.element-added, h6.element-added {
-    background-color: #eef4ff;
     border-left: 3pt solid #0047ab;
     padding-left: 8pt;
     margin-left: -11pt;
@@ -183,7 +170,6 @@ h4.element-added, h5.element-added, h6.element-added {
 p.element-deleted,
 h1.element-deleted, h2.element-deleted, h3.element-deleted,
 h4.element-deleted, h5.element-deleted, h6.element-deleted {
-    background-color: #fff5f5;
     border-left: 3pt solid #c0392b;
     padding-left: 8pt;
     margin-left: -11pt;
@@ -219,11 +205,11 @@ th {
 }
 
 tr.element-added {
-    background-color: #eef4ff;
+    border-left: 3pt solid #0047ab;
 }
 
 tr.element-deleted {
-    background-color: #fff5f5;
+    border-left: 3pt solid #c0392b;
 }
 
 /* Print-specific overrides */
