@@ -30,14 +30,33 @@ def _can_match(o: DocumentElement, mod: DocumentElement) -> bool:
 
 
 def _lcs_match(original_elements: list, modified_elements: list) -> list:
-    """Match elements using LCS to find corresponding pairs."""
+    """Weighted LCS: match elements maximising total similarity, not just count.
+
+    Standard LCS treats all matchable pairs as equal (weight 1), so it may pair
+    a 95%-similar paragraph with a 65%-similar one if that yields more total
+    matches.  Weighted LCS uses the actual similarity score as edge weight,
+    so a near-perfect match is never sacrificed for quantity.
+    """
     n, m = len(original_elements), len(modified_elements)
-    dp = [[0] * (m + 1) for _ in range(n + 1)]
+
+    # Pre-compute similarity scores (avoids redundant calls during backtrack)
+    sim_cache: dict = {}
+    for i in range(n):
+        for j in range(m):
+            if _can_match(original_elements[i], modified_elements[j]):
+                sim_cache[(i, j)] = _similarity(
+                    original_elements[i].plain_text,
+                    modified_elements[j].plain_text,
+                )
+
+    # DP with float weights
+    dp = [[0.0] * (m + 1) for _ in range(n + 1)]
 
     for i in range(1, n + 1):
         for j in range(1, m + 1):
-            if _can_match(original_elements[i - 1], modified_elements[j - 1]):
-                dp[i][j] = dp[i - 1][j - 1] + 1
+            sim = sim_cache.get((i - 1, j - 1))
+            if sim is not None:
+                dp[i][j] = max(dp[i - 1][j - 1] + sim, dp[i - 1][j], dp[i][j - 1])
             else:
                 dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
 
@@ -45,12 +64,12 @@ def _lcs_match(original_elements: list, modified_elements: list) -> list:
     matches = []
     i, j = n, m
     while i > 0 and j > 0:
-        if (_can_match(original_elements[i - 1], modified_elements[j - 1])
-                and dp[i][j] == dp[i - 1][j - 1] + 1):
+        sim = sim_cache.get((i - 1, j - 1))
+        if sim is not None and abs(dp[i][j] - (dp[i - 1][j - 1] + sim)) < 1e-9:
             matches.append((i - 1, j - 1))
             i -= 1
             j -= 1
-        elif dp[i - 1][j] > dp[i][j - 1]:
+        elif dp[i - 1][j] > dp[i][j - 1] + 1e-9:
             i -= 1
         else:
             j -= 1
