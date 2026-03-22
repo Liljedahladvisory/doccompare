@@ -933,9 +933,8 @@ def _render_summary_pdf(summary: dict, original_name: str, modified_name: str) -
 </body>
 </html>"""
 
-    cache_dir = _ensure_cache_dir()
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    tmp_path = cache_dir / f"summary_{ts}.pdf"
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
     try:
         render_pdf(html_content, css_path, tmp_path)
         return tmp_path.read_bytes()
@@ -980,12 +979,13 @@ def produce_pdf(
 
     output_pdf = Path(output_pdf)
 
-    # Use ~/Library/Caches/DocCompare/ for temp files — Word has full access
-    # (avoids macOS sandbox "grant file access" dialogs)
-    cache_dir = _ensure_cache_dir()
+    # Temp files go in the SAME directory as the output PDF.
+    # Word already has access to wherever the user chose to save
+    # (typically Desktop), so no sandbox permission dialogs.
+    out_dir = output_pdf.resolve().parent
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    tmp_docx_path = cache_dir / f"tc_{ts}.docx"
-    tmp_pdf_path = cache_dir / f"tc_{ts}.pdf"
+    tmp_docx_path = out_dir / f".doccompare_tc_{ts}.docx"
+    tmp_pdf_path = out_dir / f".doccompare_tc_{ts}.pdf"
 
     try:
         # Step 1: Write tracked-changes .docx
