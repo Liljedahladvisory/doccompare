@@ -2,9 +2,14 @@
 
 No dependency on Microsoft Word — walks the modified XML tree and produces
 HTML with inline styles, then renders via WeasyPrint.
+
+Style and numbering resolution reads word/styles.xml and word/numbering.xml
+from the source DOCX to faithfully reproduce inherited formatting.
 """
 
 import html as html_mod
+import zipfile
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -36,152 +41,470 @@ W_BODY = _qn("w:body")
 W_SECT_PR = _qn("w:sectPr")
 W_HYPERLINK = _qn("w:hyperlink")
 
+_W = f"{{{W}}}"
 
-# ── Run formatting extraction ───────────────────────────────────────────
-def _run_style(rpr) -> str:
-    """Build inline CSS from a w:rPr element."""
-    if rpr is None:
-        return ""
-    parts = []
 
-    # Bold
-    b = rpr.find(f"{{{W}}}b")
+# ── Helper: read bool-ish OOXML element ─────────────────────────────────
+def _is_on(elem):
+    """Return True if an OOXML toggle element is 'on'."""
+    if elem is None:
+        return False
+    val = elem.get(f"{_W}val", "true")
+    return val not in ("0", "false")
+
+
+# ── Style Resolver ──────────────────────────────────────────────────────
+class StyleResolver:
+    """Resolve OOXML paragraph/run styles by walking the basedOn chain."""
+
+    def __init__(self, docx_path):
+        self._styles = {}  # styleId -> etree Element
+        if docx_path is None:
+            return
+        try:
+            with zipfile.ZipFile(docx_path) as zf:
+                if "word/styles.xml" in zf.namelist():
+                    tree = etree.parse(zf.open("word/styles.xml"))
+                    for style_el in tree.iter(f"{_W}style"):
+                        sid = style_el.get(f"{_W}styleId")
+                        if sid:
+                            self._styles[sid] = style_el
+        except Exception:
+            pass
+
+    # ── public API ──────────────────────────────────────────────────────
+    def resolve_paragraph_style(self, style_id):
+        """Return (ppr_dict, rpr_dict) for a paragraph style, walking basedOn."""
+        ppr = {}
+        rpr = {}
+        if not style_id or style_id not in self._styles:
+            return ppr, rpr
+        chain = self._basedOn_chain(style_id)
+        # Apply from root ancestor to leaf (most-specific last)
+        for sid in reversed(chain):
+            el = self._styles.get(sid)
+            if el is None:
+                continue
+            ppr_el = el.find(f"{_W}pPr")
+            if ppr_el is not None:
+                _merge_ppr_dict(ppr, _parse_ppr(ppr_el))
+            rpr_el = el.find(f"{_W}rPr")
+            if rpr_el is not None:
+                _merge_rpr_dict(rpr, _parse_rpr(rpr_el))
+        return ppr, rpr
+
+    def resolve_run_style(self, style_id):
+        """Return rpr_dict for a character style, walking basedOn."""
+        rpr = {}
+        if not style_id or style_id not in self._styles:
+            return rpr
+        chain = self._basedOn_chain(style_id)
+        for sid in reversed(chain):
+            el = self._styles.get(sid)
+            if el is None:
+                continue
+            rpr_el = el.find(f"{_W}rPr")
+            if rpr_el is not None:
+                _merge_rpr_dict(rpr, _parse_rpr(rpr_el))
+        return rpr
+
+    def get_style_numpr(self, style_id):
+        """Walk the style basedOn chain to find numPr (numId, ilvl).
+
+        numId and ilvl may come from different levels in the chain.
+        E.g. Heading2NotinTOC has ilvl=1, basedOn Heading1NotinTOC which has numId=24.
+        We collect them independently: first non-None wins for each.
+        """
+        if not style_id:
+            return None, None
+        chain = self._basedOn_chain(style_id)
+        found_nid = None
+        found_ilvl = None
+        # Walk from leaf to root — first found wins for each property
+        for sid in chain:
+            el = self._styles.get(sid)
+            if el is None:
+                continue
+            ppr_el = el.find(f"{_W}pPr")
+            if ppr_el is None:
+                continue
+            numpr = ppr_el.find(f"{_W}numPr")
+            if numpr is not None:
+                nid_el = numpr.find(f"{_W}numId")
+                ilvl_el = numpr.find(f"{_W}ilvl")
+                if found_nid is None and nid_el is not None:
+                    found_nid = nid_el.get(f"{_W}val")
+                if found_ilvl is None and ilvl_el is not None:
+                    found_ilvl = ilvl_el.get(f"{_W}val")
+            if found_nid is not None and found_ilvl is not None:
+                break
+        # Suppress if numId=0
+        if found_nid == "0":
+            return None, None
+        return found_nid, found_ilvl
+
+    # ── internals ───────────────────────────────────────────────────────
+    def _basedOn_chain(self, style_id, _seen=None):
+        """Return list [style_id, parent, grandparent, ...] (leaf-first)."""
+        if _seen is None:
+            _seen = set()
+        if style_id in _seen or style_id not in self._styles:
+            return []
+        _seen.add(style_id)
+        chain = [style_id]
+        el = self._styles[style_id]
+        based = el.find(f"{_W}basedOn")
+        if based is not None:
+            parent_id = based.get(f"{_W}val")
+            if parent_id:
+                chain.extend(self._basedOn_chain(parent_id, _seen))
+        return chain
+
+
+# ── Numbering Resolver ──────────────────────────────────────────────────
+class NumberingResolver:
+    """Resolve OOXML numbering definitions and generate labels."""
+
+    def __init__(self, docx_path):
+        self._abstract_nums = {}   # abstractNumId -> etree Element
+        self._num_to_abstract = {}  # numId -> abstractNumId (str)
+        self._counters = {}         # (numId, ilvl) -> current count
+        self._last_ilvl = {}        # numId -> last ilvl used (for reset)
+        if docx_path is None:
+            return
+        try:
+            with zipfile.ZipFile(docx_path) as zf:
+                if "word/numbering.xml" in zf.namelist():
+                    tree = etree.parse(zf.open("word/numbering.xml"))
+                    root = tree.getroot()
+                    for an in root.iter(f"{_W}abstractNum"):
+                        aid = an.get(f"{_W}abstractNumId")
+                        if aid:
+                            self._abstract_nums[aid] = an
+                    for num in root.iter(f"{_W}num"):
+                        nid = num.get(f"{_W}numId")
+                        anr = num.find(f"{_W}abstractNumId")
+                        if nid and anr is not None:
+                            self._num_to_abstract[nid] = anr.get(f"{_W}val")
+        except Exception:
+            pass
+
+    def generate_label(self, num_id, ilvl):
+        """Return the numbering label string (e.g. '1.2') or '' if none."""
+        if num_id is None or num_id == "0":
+            return ""
+        ilvl = int(ilvl or 0)
+        lvl_el = self._find_level(num_id, ilvl)
+        if lvl_el is None:
+            return ""
+
+        num_fmt = lvl_el.findtext(f"{_W}numFmt", default="")
+        if not num_fmt:
+            fmt_el = lvl_el.find(f"{_W}numFmt")
+            if fmt_el is not None:
+                num_fmt = fmt_el.get(f"{_W}val", "")
+
+        lvl_text_el = lvl_el.find(f"{_W}lvlText")
+        lvl_text = lvl_text_el.get(f"{_W}val", "") if lvl_text_el is not None else ""
+        start_el = lvl_el.find(f"{_W}start")
+        start = int(start_el.get(f"{_W}val", "1")) if start_el is not None else 1
+
+        # Reset deeper levels when a shallower level is hit
+        last = self._last_ilvl.get(num_id, -1)
+        if ilvl <= last:
+            # Reset all deeper levels
+            for deeper in range(ilvl + 1, 10):
+                self._counters.pop((num_id, deeper), None)
+        self._last_ilvl[num_id] = ilvl
+
+        # Increment counter
+        key = (num_id, ilvl)
+        if key not in self._counters:
+            self._counters[key] = start
+        else:
+            self._counters[key] += 1
+        current = self._counters[key]
+
+        # Build label by substituting %1, %2, etc.
+        label = lvl_text
+        for lvl_idx in range(ilvl + 1):
+            counter_val = self._counters.get((num_id, lvl_idx), 1)
+            fmt = self._get_fmt_for_level(num_id, lvl_idx)
+            formatted = self._format_number(counter_val, fmt)
+            label = label.replace(f"%{lvl_idx + 1}", formatted)
+
+        return label
+
+    def _find_level(self, num_id, ilvl):
+        """Find the w:lvl element, following numStyleLink chains."""
+        abstract_id = self._num_to_abstract.get(str(num_id))
+        if abstract_id is None:
+            return None
+        return self._find_level_in_abstract(abstract_id, ilvl, set())
+
+    def _find_level_in_abstract(self, abstract_id, ilvl, seen):
+        if abstract_id in seen or abstract_id not in self._abstract_nums:
+            return None
+        seen.add(abstract_id)
+        an = self._abstract_nums[abstract_id]
+
+        # Check for numStyleLink — follow to the linked abstract
+        nsl = an.find(f"{_W}numStyleLink")
+        if nsl is not None:
+            link_style = nsl.get(f"{_W}val", "")
+            target_aid = self._find_abstract_by_style_link(link_style)
+            if target_aid is not None:
+                return self._find_level_in_abstract(target_aid, ilvl, seen)
+
+        # Find the level directly
+        for lvl in an.iter(f"{_W}lvl"):
+            if lvl.get(f"{_W}ilvl") == str(ilvl):
+                return lvl
+        return None
+
+    def _find_abstract_by_style_link(self, style_name):
+        """Find abstractNumId that has a styleLink matching the given name."""
+        for aid, an in self._abstract_nums.items():
+            sl = an.find(f"{_W}styleLink")
+            if sl is not None and sl.get(f"{_W}val", "") == style_name:
+                return aid
+        return None
+
+    def _get_fmt_for_level(self, num_id, lvl_idx):
+        """Get numFmt for a specific level."""
+        lvl_el = self._find_level(num_id, lvl_idx)
+        if lvl_el is None:
+            return "decimal"
+        fmt_el = lvl_el.find(f"{_W}numFmt")
+        if fmt_el is not None:
+            return fmt_el.get(f"{_W}val", "decimal")
+        return "decimal"
+
+    @staticmethod
+    def _format_number(n, fmt):
+        if fmt == "decimal":
+            return str(n)
+        elif fmt == "lowerLetter":
+            return chr(ord('a') + (n - 1) % 26)
+        elif fmt == "upperLetter":
+            return chr(ord('A') + (n - 1) % 26)
+        elif fmt == "lowerRoman":
+            return _to_roman(n).lower()
+        elif fmt == "upperRoman":
+            return _to_roman(n)
+        elif fmt == "none":
+            return ""
+        return str(n)
+
+
+def _to_roman(n):
+    result = ""
+    for val, rom in [(1000, 'M'), (900, 'CM'), (500, 'D'), (400, 'CD'),
+                     (100, 'C'), (90, 'XC'), (50, 'L'), (40, 'XL'),
+                     (10, 'X'), (9, 'IX'), (5, 'V'), (4, 'IV'), (1, 'I')]:
+        while n >= val:
+            result += rom
+            n -= val
+    return result
+
+
+# ── Parsing helpers: XML element → dict ─────────────────────────────────
+def _parse_ppr(ppr_el):
+    """Parse a w:pPr element into a dict."""
+    d = {}
+    if ppr_el is None:
+        return d
+
+    jc = ppr_el.find(f"{_W}jc")
+    if jc is not None:
+        d["alignment"] = jc.get(f"{_W}val", "")
+
+    ind = ppr_el.find(f"{_W}ind")
+    if ind is not None:
+        for attr, key in [("left", "left_indent"), ("start", "left_indent"),
+                          ("right", "right_indent"), ("end", "right_indent"),
+                          ("hanging", "hanging"), ("firstLine", "first_line")]:
+            val = ind.get(f"{_W}{attr}")
+            if val is not None:
+                try:
+                    d[key] = int(val)
+                except ValueError:
+                    pass
+
+    spacing = ppr_el.find(f"{_W}spacing")
+    if spacing is not None:
+        for attr, key in [("before", "space_before"), ("after", "space_after"),
+                          ("line", "line_val")]:
+            val = spacing.get(f"{_W}{attr}")
+            if val is not None:
+                try:
+                    d[key] = int(val)
+                except ValueError:
+                    pass
+        lr = spacing.get(f"{_W}lineRule")
+        if lr:
+            d["line_rule"] = lr
+
+    return d
+
+
+def _parse_rpr(rpr_el):
+    """Parse a w:rPr element into a dict."""
+    d = {}
+    if rpr_el is None:
+        return d
+
+    b = rpr_el.find(f"{_W}b")
     if b is not None:
-        val = b.get(f"{{{W}}}val", "true")
-        if val not in ("0", "false"):
-            parts.append("font-weight:bold")
+        d["bold"] = _is_on(b)
 
-    # Italic
-    i = rpr.find(f"{{{W}}}i")
+    i = rpr_el.find(f"{_W}i")
     if i is not None:
-        val = i.get(f"{{{W}}}val", "true")
-        if val not in ("0", "false"):
-            parts.append("font-style:italic")
+        d["italic"] = _is_on(i)
 
-    # Underline
-    u = rpr.find(f"{{{W}}}u")
+    u = rpr_el.find(f"{_W}u")
     if u is not None:
-        val = u.get(f"{{{W}}}val", "single")
-        if val != "none":
-            parts.append("text-decoration:underline")
+        val = u.get(f"{_W}val", "single")
+        d["underline"] = val != "none"
 
-    # Strikethrough
-    strike = rpr.find(f"{{{W}}}strike")
+    strike = rpr_el.find(f"{_W}strike")
     if strike is not None:
-        val = strike.get(f"{{{W}}}val", "true")
-        if val not in ("0", "false"):
-            parts.append("text-decoration:line-through")
+        d["strike"] = _is_on(strike)
 
-    # Font size (w:sz is in half-points)
-    sz = rpr.find(f"{{{W}}}sz")
+    sz = rpr_el.find(f"{_W}sz")
     if sz is not None:
         try:
-            pt = int(sz.get(f"{{{W}}}val", "0")) / 2
-            if pt > 0:
-                parts.append(f"font-size:{pt:.1f}pt")
+            d["font_size_half_pts"] = int(sz.get(f"{_W}val", "0"))
         except (ValueError, TypeError):
             pass
 
-    # Font name
-    rfonts = rpr.find(f"{{{W}}}rFonts")
+    rfonts = rpr_el.find(f"{_W}rFonts")
     if rfonts is not None:
-        name = (rfonts.get(f"{{{W}}}ascii")
-                or rfonts.get(f"{{{W}}}hAnsi")
-                or rfonts.get(f"{{{W}}}cs"))
+        name = (rfonts.get(f"{_W}ascii")
+                or rfonts.get(f"{_W}hAnsi")
+                or rfonts.get(f"{_W}cs"))
         if name:
-            parts.append(f"font-family:'{name}', serif")
+            d["font_name"] = name
 
-    # Color
-    color = rpr.find(f"{{{W}}}color")
+    color = rpr_el.find(f"{_W}color")
     if color is not None:
-        val = color.get(f"{{{W}}}val", "")
-        if val and val != "auto" and len(val) == 6:
-            parts.append(f"color:#{val}")
+        val = color.get(f"{_W}val", "")
+        if val and val != "auto":
+            d["color"] = val
+
+    return d
+
+
+def _merge_ppr_dict(base, overlay):
+    """Merge overlay ppr_dict into base (overlay wins)."""
+    base.update({k: v for k, v in overlay.items() if v is not None})
+
+
+def _merge_rpr_dict(base, overlay):
+    """Merge overlay rpr_dict into base (overlay wins)."""
+    base.update({k: v for k, v in overlay.items() if v is not None})
+
+
+# ── Dict → CSS conversion ──────────────────────────────────────────────
+def _ppr_dict_to_css(d):
+    """Convert a ppr_dict to inline CSS string."""
+    parts = []
+    align_map = {"left": "left", "center": "center", "right": "right",
+                 "both": "justify", "justify": "justify"}
+    alignment = d.get("alignment")
+    if alignment:
+        css = align_map.get(alignment)
+        if css:
+            parts.append(f"text-align:{css}")
+
+    left = d.get("left_indent")
+    if left:
+        parts.append(f"margin-left:{left / 20:.1f}pt")
+
+    right = d.get("right_indent")
+    if right:
+        parts.append(f"margin-right:{right / 20:.1f}pt")
+
+    hanging = d.get("hanging")
+    first_line = d.get("first_line")
+    if hanging:
+        parts.append(f"text-indent:-{hanging / 20:.1f}pt")
+    elif first_line:
+        parts.append(f"text-indent:{first_line / 20:.1f}pt")
+
+    sb = d.get("space_before")
+    if sb is not None:
+        parts.append(f"margin-top:{sb / 20:.1f}pt")
+
+    sa = d.get("space_after")
+    if sa is not None:
+        parts.append(f"margin-bottom:{sa / 20:.1f}pt")
+
+    line_val = d.get("line_val")
+    if line_val:
+        lr = d.get("line_rule", "")
+        if lr in ("exact", "atLeast"):
+            parts.append(f"line-height:{line_val / 20:.1f}pt")
+        else:
+            parts.append(f"line-height:{line_val / 240:.2f}")
 
     return ";".join(parts)
 
 
-# ── Paragraph formatting extraction ─────────────────────────────────────
-def _para_style(ppr) -> str:
-    """Build inline CSS from a w:pPr element."""
-    if ppr is None:
-        return ""
+def _rpr_dict_to_css(d):
+    """Convert an rpr_dict to inline CSS string."""
     parts = []
 
-    # Alignment (w:jc)
-    jc = ppr.find(f"{{{W}}}jc")
-    if jc is not None:
-        align_map = {"left": "left", "center": "center", "right": "right",
-                     "both": "justify", "justify": "justify"}
-        val = jc.get(f"{{{W}}}val", "")
-        css_align = align_map.get(val)
-        if css_align:
-            parts.append(f"text-align:{css_align}")
+    if d.get("bold"):
+        parts.append("font-weight:bold")
+    if d.get("italic"):
+        parts.append("font-style:italic")
+    if d.get("underline"):
+        parts.append("text-decoration:underline")
+    if d.get("strike"):
+        # If already underline, combine
+        if d.get("underline"):
+            parts[-1] = "text-decoration:underline line-through"
+        else:
+            parts.append("text-decoration:line-through")
 
-    # Indentation (w:ind) — values in twips (1/20 pt)
-    ind = ppr.find(f"{{{W}}}ind")
-    if ind is not None:
-        left = ind.get(f"{{{W}}}left") or ind.get(f"{{{W}}}start")
-        right = ind.get(f"{{{W}}}right") or ind.get(f"{{{W}}}end")
-        hanging = ind.get(f"{{{W}}}hanging")
-        first_line = ind.get(f"{{{W}}}firstLine")
-        if left:
-            try:
-                parts.append(f"margin-left:{int(left)/20:.1f}pt")
-            except ValueError:
-                pass
-        if right:
-            try:
-                parts.append(f"margin-right:{int(right)/20:.1f}pt")
-            except ValueError:
-                pass
-        if hanging:
-            try:
-                parts.append(f"text-indent:-{int(hanging)/20:.1f}pt")
-            except ValueError:
-                pass
-        elif first_line:
-            try:
-                parts.append(f"text-indent:{int(first_line)/20:.1f}pt")
-            except ValueError:
-                pass
+    sz = d.get("font_size_half_pts")
+    if sz and sz > 0:
+        parts.append(f"font-size:{sz / 2:.1f}pt")
 
-    # Spacing (w:spacing)
-    spacing = ppr.find(f"{{{W}}}spacing")
-    if spacing is not None:
-        before = spacing.get(f"{{{W}}}before")
-        after = spacing.get(f"{{{W}}}after")
-        line = spacing.get(f"{{{W}}}line")
-        line_rule = spacing.get(f"{{{W}}}lineRule", "")
-        if before:
-            try:
-                parts.append(f"margin-top:{int(before)/20:.1f}pt")
-            except ValueError:
-                pass
-        if after:
-            try:
-                parts.append(f"margin-bottom:{int(after)/20:.1f}pt")
-            except ValueError:
-                pass
-        if line:
-            try:
-                val = int(line)
-                if line_rule == "exact" or line_rule == "atLeast":
-                    parts.append(f"line-height:{val/20:.1f}pt")
-                else:
-                    # Proportional: 240 = single spacing
-                    parts.append(f"line-height:{val/240:.2f}")
-            except ValueError:
-                pass
+    fn = d.get("font_name")
+    if fn:
+        parts.append(f"font-family:'{fn}', serif")
+
+    color = d.get("color")
+    if color and len(color) == 6:
+        parts.append(f"color:#{color}")
 
     return ";".join(parts)
 
 
-# ── Element rendering ───────────────────────────────────────────────────
-def _render_run(run, css_class=None):
-    """Render a w:r to HTML."""
-    rpr = run.find(W_RPR)
-    style = _run_style(rpr)
+# ── Element rendering (style-aware) ────────────────────────────────────
+def _render_run(run, css_class=None, default_rpr=None, style_resolver=None):
+    """Render a w:r to HTML, merging style + direct formatting."""
+    rpr_el = run.find(W_RPR)
+    effective = dict(default_rpr) if default_rpr else {}
+
+    # Resolve rStyle if present
+    if rpr_el is not None and style_resolver is not None:
+        rstyle = rpr_el.find(f"{_W}rStyle")
+        if rstyle is not None:
+            sid = rstyle.get(f"{_W}val")
+            if sid:
+                style_rpr = style_resolver.resolve_run_style(sid)
+                _merge_rpr_dict(effective, style_rpr)
+
+    # Merge direct formatting on top
+    if rpr_el is not None:
+        direct = _parse_rpr(rpr_el)
+        _merge_rpr_dict(effective, direct)
+
+    style = _rpr_dict_to_css(effective)
+
     t = run.find(W_T)
     text = html_mod.escape(t.text or "") if t is not None else ""
     if not text:
@@ -192,11 +515,26 @@ def _render_run(run, css_class=None):
     return f"<span{classes}{style_attr}>{text}</span>"
 
 
-def _render_del_run(run):
+def _render_del_run(run, default_rpr=None, style_resolver=None):
     """Render a deleted w:r (with w:delText) to HTML."""
-    rpr = run.find(W_RPR)
-    style = _run_style(rpr)
-    dt = run.find(f"{{{W}}}delText")
+    rpr_el = run.find(W_RPR)
+    effective = dict(default_rpr) if default_rpr else {}
+
+    if rpr_el is not None and style_resolver is not None:
+        rstyle = rpr_el.find(f"{_W}rStyle")
+        if rstyle is not None:
+            sid = rstyle.get(f"{_W}val")
+            if sid:
+                style_rpr = style_resolver.resolve_run_style(sid)
+                _merge_rpr_dict(effective, style_rpr)
+
+    if rpr_el is not None:
+        direct = _parse_rpr(rpr_el)
+        _merge_rpr_dict(effective, direct)
+
+    style = _rpr_dict_to_css(effective)
+
+    dt = run.find(f"{_W}delText")
     text = html_mod.escape(dt.text or "") if dt is not None else ""
     if not text:
         return ""
@@ -205,47 +543,96 @@ def _render_del_run(run):
     return f'<span class="deleted"{style_attr}>{text}</span>'
 
 
-def _render_paragraph(para) -> str:
-    """Render a w:p to HTML <p>."""
-    ppr = para.find(W_PPR)
-    style = _para_style(ppr)
-    style_attr = f' style="{style}"' if style else ""
+def _render_paragraph(para, style_resolver=None, numbering_resolver=None) -> str:
+    """Render a w:p to HTML <p>, with full style + numbering resolution."""
+    ppr_el = para.find(W_PPR)
 
-    # Check if entire paragraph is inserted or deleted (pPr/rPr/w:ins or w:del)
+    # 1. Get paragraph style ID
+    p_style_id = None
+    if ppr_el is not None:
+        pstyle = ppr_el.find(f"{_W}pStyle")
+        if pstyle is not None:
+            p_style_id = pstyle.get(f"{_W}val")
+
+    # 2. Resolve style chain → effective ppr_dict and rpr_dict (defaults for runs)
+    effective_ppr = {}
+    default_rpr = {}
+    if style_resolver and p_style_id:
+        effective_ppr, default_rpr = style_resolver.resolve_paragraph_style(p_style_id)
+
+    # 3. Merge DIRECT pPr on top
+    if ppr_el is not None:
+        direct_ppr = _parse_ppr(ppr_el)
+        _merge_ppr_dict(effective_ppr, direct_ppr)
+
+    style = _ppr_dict_to_css(effective_ppr)
+
+    # 4. Numbering
+    num_label = ""
+    if numbering_resolver is not None:
+        num_id = None
+        ilvl = None
+        # Check direct numPr first
+        if ppr_el is not None:
+            numpr = ppr_el.find(f"{_W}numPr")
+            if numpr is not None:
+                nid_el = numpr.find(f"{_W}numId")
+                ilvl_el = numpr.find(f"{_W}ilvl")
+                if nid_el is not None:
+                    num_id = nid_el.get(f"{_W}val")
+                if ilvl_el is not None:
+                    ilvl = ilvl_el.get(f"{_W}val")
+        # Fallback: check style chain for numPr
+        if num_id is None and style_resolver and p_style_id:
+            num_id, ilvl = style_resolver.get_style_numpr(p_style_id)
+        if num_id and num_id != "0":
+            num_label = numbering_resolver.generate_label(num_id, ilvl)
+
+    # 5. Check if entire paragraph is inserted or deleted
     para_class = ""
-    if ppr is not None:
-        rpr = ppr.find(W_RPR)
+    if ppr_el is not None:
+        rpr = ppr_el.find(W_RPR)
         if rpr is not None:
             if rpr.find(W_INS) is not None:
                 para_class = " element-added"
             elif rpr.find(W_DEL) is not None:
                 para_class = " element-deleted"
 
+    # 6. Render child runs
     content = []
+    if num_label:
+        content.append(f'<span class="numbering">{html_mod.escape(num_label)}\u00a0</span>')
+
     for child in para:
         if child.tag == W_R:
-            content.append(_render_run(child))
+            content.append(_render_run(child, default_rpr=default_rpr,
+                                       style_resolver=style_resolver))
         elif child.tag == W_INS:
             for r in child:
                 if r.tag == W_R:
-                    content.append(_render_run(r, css_class="added"))
+                    content.append(_render_run(r, css_class="added",
+                                               default_rpr=default_rpr,
+                                               style_resolver=style_resolver))
         elif child.tag == W_DEL:
             for r in child:
                 if r.tag == W_R:
-                    content.append(_render_del_run(r))
+                    content.append(_render_del_run(r, default_rpr=default_rpr,
+                                                   style_resolver=style_resolver))
         elif child.tag == W_HYPERLINK:
             for r in child:
                 if r.tag == W_R:
-                    content.append(_render_run(r))
+                    content.append(_render_run(r, default_rpr=default_rpr,
+                                               style_resolver=style_resolver))
 
     inner = "".join(content)
     if not inner.strip():
         return ""
     class_attr = f' class="{para_class.strip()}"' if para_class else ""
+    style_attr = f' style="{style}"' if style else ""
     return f"<p{class_attr}{style_attr}>{inner}</p>"
 
 
-def _render_table(tbl) -> str:
+def _render_table(tbl, style_resolver=None, numbering_resolver=None) -> str:
     """Render a w:tbl to HTML <table>."""
     rows = []
     for tr in tbl:
@@ -258,7 +645,10 @@ def _render_table(tbl) -> str:
             cell_html = []
             for p in tc:
                 if p.tag == W_P:
-                    rendered = _render_paragraph(p)
+                    rendered = _render_paragraph(
+                        p, style_resolver=style_resolver,
+                        numbering_resolver=numbering_resolver,
+                    )
                     if rendered:
                         cell_html.append(rendered)
             cells.append(f"<td>{''.join(cell_html)}</td>")
@@ -271,20 +661,31 @@ def render_tracked_changes_html(
     summary: dict,
     original_name: str,
     modified_name: str,
+    docx_path=None,
 ) -> str:
     """Walk the OOXML tree and produce full HTML with tracked changes."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     body = doc_tree.find(W_BODY)
 
+    # Build resolvers from the source DOCX (if provided)
+    style_resolver = StyleResolver(docx_path)
+    numbering_resolver = NumberingResolver(docx_path)
+
     # Render all block elements
     body_parts = []
     for child in body:
         if child.tag == W_P:
-            rendered = _render_paragraph(child)
+            rendered = _render_paragraph(
+                child, style_resolver=style_resolver,
+                numbering_resolver=numbering_resolver,
+            )
             if rendered:
                 body_parts.append(rendered)
         elif child.tag == W_TBL:
-            body_parts.append(_render_table(child))
+            body_parts.append(_render_table(
+                child, style_resolver=style_resolver,
+                numbering_resolver=numbering_resolver,
+            ))
 
     content_html = "\n".join(body_parts)
 
@@ -391,12 +792,14 @@ def produce_pdf(
     summary: dict,
     original_name: str,
     modified_name: str,
+    docx_path=None,
 ):
     """Render tracked-changes XML tree to PDF via WeasyPrint."""
     from doccompare.rendering.pdf_renderer import render_pdf
 
     html_content = render_tracked_changes_html(
         doc_tree, summary, original_name, modified_name,
+        docx_path=docx_path,
     )
     css_path = Path(__file__).parent / "styles.css"
     render_pdf(html_content, css_path, output_pdf)

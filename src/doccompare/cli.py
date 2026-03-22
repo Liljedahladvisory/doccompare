@@ -69,6 +69,7 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
                 doc_tree, output, summary,
                 original_name=original.name,
                 modified_name=modified.name,
+                docx_path=modified,
             )
         except Exception as e:
             click.echo(f"Error: {e}", err=True)

@@ -205,6 +205,7 @@ class DocCompareApp:
                     doc_tree, output, summary,
                     original_name=self.original_path.name,
                     modified_name=self.modified_path.name,
+                    docx_path=self.modified_path,
                 )
 
                 s = summary
