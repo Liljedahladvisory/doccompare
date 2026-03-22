@@ -583,6 +583,173 @@ def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
     }
 
 
+# ── Direct PDF annotation ────────────────────────────────────────────────
+
+def _annotate_pdf(
+    new_pdf_path: Path,
+    output_pdf: Path,
+    old_paras: list[dict],
+    new_paras: list[dict],
+    summary: dict,
+    original_name: str,
+    modified_name: str,
+):
+    """Annotate the newer PDF directly with diff highlights.
+
+    - Added text: blue underline highlight
+    - Deleted text: red margin comments
+    - Preserves 100% of original PDF formatting.
+    """
+    import fitz  # PyMuPDF
+
+    doc = fitz.open(str(new_pdf_path))
+
+    old_texts = [p["text"] for p in old_paras]
+    new_texts = [p["text"] for p in new_paras]
+
+    matches = _match_paragraphs(old_texts, new_texts)
+    matched_old = {i for i, _ in matches}
+    matched_new = {j for _, j in matches}
+
+    # Colors
+    BLUE = fitz.pdfcolor["blue"]
+    RED = fitz.pdfcolor["red"]
+    LIGHT_BLUE = (0.85, 0.92, 1.0)   # Light blue highlight
+    LIGHT_RED = (1.0, 0.88, 0.88)    # Light red highlight
+
+    # Track annotations added per page for comment positioning
+    page_comment_y: dict[int, float] = {}
+
+    # Process matched pairs — find changed segments
+    for oi, nj in matches:
+        diff_segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
+
+        has_changes = any(st != "equal" for st, _ in diff_segments)
+        if not has_changes:
+            continue
+
+        # Collect added and deleted text for this paragraph
+        added_parts = []
+        deleted_parts = []
+        for seg_type, seg_text in diff_segments:
+            if seg_type == "added":
+                added_parts.append(seg_text)
+            elif seg_type == "deleted":
+                deleted_parts.append(seg_text)
+
+        # Highlight added text in the PDF (search in new PDF)
+        for added_text in added_parts:
+            # Search for the text across all pages
+            _highlight_text(doc, added_text, LIGHT_BLUE, BLUE)
+
+        # Add deleted text as margin comments
+        if deleted_parts:
+            deleted_combined = " [...] ".join(deleted_parts)
+            # Find where the new paragraph text appears to place comment nearby
+            new_text_snippet = new_paras[nj]["text"][:60]
+            _add_deletion_comment(doc, new_text_snippet, deleted_combined, page_comment_y)
+
+    # Mark entirely new paragraphs (unmatched in new)
+    for j in range(len(new_paras)):
+        if j not in matched_new:
+            text = new_paras[j]["text"]
+            _highlight_text(doc, text, LIGHT_BLUE, BLUE)
+
+    # Mark entirely deleted paragraphs (unmatched in old)
+    deleted_whole = []
+    for i in range(len(old_paras)):
+        if i not in matched_old:
+            deleted_whole.append(old_paras[i]["text"])
+
+    if deleted_whole:
+        # Add a single comment on page 1 listing all fully deleted paragraphs
+        for del_text in deleted_whole:
+            _add_deletion_comment(doc, "", f"[DELETED] {del_text}", page_comment_y)
+
+    # Save annotated PDF to temp, then merge with summary page
+    annotated_bytes = doc.tobytes()
+    doc.close()
+
+    # Generate summary page and merge
+    from doccompare.rendering.pdf_pipeline import _render_summary_pdf, _merge_pdfs
+
+    summary_bytes = _render_summary_pdf(summary, original_name, modified_name)
+
+    # Write annotated PDF to temp file, then merge
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(annotated_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        _merge_pdfs(tmp_path, summary_bytes, output_pdf)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _highlight_text(doc, text: str, bg_color: tuple, border_color: tuple):
+    """Search for text in the PDF and add highlight annotations."""
+    import fitz
+
+    if not text or len(text) < 2:
+        return
+
+    # Search for the text (or a reasonable chunk of it)
+    # For long texts, search for the first ~80 chars to find the location
+    search_text = text[:80] if len(text) > 80 else text
+
+    for page in doc:
+        rects = page.search_for(search_text, quads=True)
+        if rects:
+            for quad in rects:
+                annot = page.add_highlight_annot(quad)
+                annot.set_colors(stroke=border_color)
+                annot.set_opacity(0.3)
+                annot.update()
+            break  # Found on this page, no need to check others
+
+
+def _add_deletion_comment(
+    doc, near_text: str, deleted_text: str, page_comment_y: dict,
+):
+    """Add a text annotation (comment) for deleted text near where it was."""
+    import fitz
+
+    # Try to find the location of nearby text
+    target_page = 0
+    target_point = None
+
+    if near_text:
+        search = near_text[:50] if len(near_text) > 50 else near_text
+        for page_num, page in enumerate(doc):
+            rects = page.search_for(search)
+            if rects:
+                target_page = page_num
+                rect = rects[0]
+                target_point = fitz.Point(rect.x1 + 5, rect.y0)
+                break
+
+    page = doc[target_page]
+
+    if target_point is None:
+        # Place at right margin, stacked vertically
+        y = page_comment_y.get(target_page, 50)
+        target_point = fitz.Point(page.rect.width - 30, y)
+        page_comment_y[target_page] = y + 20
+
+    # Truncate very long deletion text for the comment
+    if len(deleted_text) > 300:
+        deleted_text = deleted_text[:300] + "..."
+
+    annot = page.add_text_annot(
+        target_point,
+        f"Deleted: {deleted_text}",
+        icon="Comment",
+    )
+    annot.set_colors(stroke=(1, 0, 0))  # Red
+    annot.update()
+
+
 # ── Public API ───────────────────────────────────────────────────────────
 
 def compare_pdfs(
@@ -592,16 +759,13 @@ def compare_pdfs(
     original_name: str | None = None,
     modified_name: str | None = None,
 ):
-    """Compare two PDFs and produce a diff report as PDF.
+    """Compare two PDFs and produce an annotated diff report.
 
-    Primary path (Word available):
-      1. Convert both PDFs to DOCX via Word headless
-      2. Run OOXML comparison engine (same as .docx pipeline)
-      3. Render track-changes DOCX back to PDF via Word
-      → Preserves original formatting perfectly.
-
-    Fallback path (no Word):
-      Extract text, diff, render via WeasyPrint (lossy formatting).
+    Annotates the newer PDF directly:
+    - Blue highlights for added/changed text
+    - Red comment annotations for deleted text
+    - Preserves 100% of original formatting.
+    - Appends summary/legend page at the end.
 
     Returns summary dict with word counts.
     """
@@ -611,159 +775,6 @@ def compare_pdfs(
 
     original_name = original_name or old_path.name
     modified_name = modified_name or new_path.name
-
-    # Try the Word-based pipeline first (best formatting)
-    summary = _compare_pdfs_via_word(
-        old_path, new_path, output_pdf, original_name, modified_name,
-    )
-    if summary is not None:
-        return summary
-
-    # Fallback: text extraction + WeasyPrint
-    logger.warning("Word not available — falling back to text-based PDF comparison")
-    return _compare_pdfs_text_based(
-        old_path, new_path, output_pdf, original_name, modified_name,
-    )
-
-
-def _cleanup_converted_docx(docx_path: Path) -> None:
-    """Clean up a Word-converted PDF→DOCX to fix formatting artifacts.
-
-    Word's PDF-to-DOCX converter often creates:
-    - Center-aligned tab stops that produce huge gaps (e.g., "1.2 [TAB] text")
-    - Inconsistent indentation across similar paragraphs
-
-    This function:
-    1. Replaces center/right tab stops with left-aligned ones
-    2. Replaces w:tab elements in runs with a space when the tab stop is
-       center/right (these create the oversized gaps)
-    3. Normalizes the DOCX in-place
-    """
-    import shutil
-
-    tmp_path = docx_path.with_suffix(".docx.tmp")
-
-    W = _W
-
-    with zipfile.ZipFile(docx_path, "r") as zin:
-        doc_xml = etree.fromstring(zin.read("word/document.xml"))
-
-        body = doc_xml.find(_W_BODY)
-        fixed_tabs = 0
-
-        for p in body.iter(_W_P):
-            ppr = p.find(_W_PPR)
-            if ppr is None:
-                continue
-
-            tabs_el = ppr.find(_W_TABS)
-            has_center_tab = False
-
-            if tabs_el is not None:
-                for tab in list(tabs_el):
-                    val = tab.get(f"{{{W}}}val", "")
-                    if val in ("center", "right"):
-                        has_center_tab = True
-                        # Change to left-aligned tab at same position
-                        tab.set(f"{{{W}}}val", "left")
-
-            if has_center_tab:
-                # Replace w:tab elements with a space in runs
-                for r in p.iter(_W_R):
-                    for child in list(r):
-                        if child.tag == _W_TAB:
-                            # Replace tab with a space character
-                            r.remove(child)
-                            t = etree.SubElement(r, _W_T)
-                            t.text = " "
-                            t.set(f"{{{_XML_NS}}}space", "preserve")
-                            fixed_tabs += 1
-
-        if fixed_tabs:
-            logger.debug(f"Fixed {fixed_tabs} center/right tab stops in converted DOCX")
-
-        # Write modified document.xml back
-        xml_bytes = etree.tostring(
-            doc_xml, xml_declaration=True, encoding="UTF-8", standalone=True,
-        )
-
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
-            for item in zin.infolist():
-                if item.filename == "word/document.xml":
-                    zout.writestr(item, xml_bytes)
-                else:
-                    zout.writestr(item, zin.read(item.filename))
-
-    # Replace original with cleaned version
-    shutil.move(str(tmp_path), str(docx_path))
-
-
-def _compare_pdfs_via_word(
-    old_path: Path,
-    new_path: Path,
-    output_pdf: Path,
-    original_name: str,
-    modified_name: str,
-) -> dict | None:
-    """Compare PDFs by converting to DOCX via Word, then using OOXML engine.
-
-    Returns summary dict on success, None if Word is unavailable.
-    """
-    from doccompare.rendering.pdf_pipeline import (
-        _word_temp_dir, _pdf_to_docx_headless, produce_pdf,
-    )
-    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-
-    word_dir = _word_temp_dir()
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    old_docx = word_dir / f".doccompare_old_{ts}.docx"
-    new_docx = word_dir / f".doccompare_new_{ts}.docx"
-
-    try:
-        # Step 1: Convert both PDFs to DOCX via Word
-        logger.info(f"Converting {old_path.name} to DOCX via Word")
-        if not _pdf_to_docx_headless(old_path, old_docx):
-            return None
-
-        logger.info(f"Converting {new_path.name} to DOCX via Word")
-        if not _pdf_to_docx_headless(new_path, new_docx):
-            return None
-
-        # Step 2: Clean up converted DOCX (fix center tabs, etc.)
-        logger.info("Cleaning up converted documents")
-        _cleanup_converted_docx(old_docx)
-        _cleanup_converted_docx(new_docx)
-
-        # Step 3: Run OOXML comparison (same engine as .docx files)
-        logger.info("Running OOXML comparison on converted documents")
-        doc_tree, summary = ooxml_compare(old_docx, new_docx, None)
-
-        # Step 3: Render to PDF via Word (same pipeline as .docx)
-        logger.info("Rendering PDF via Word")
-        produce_pdf(
-            doc_tree, output_pdf, summary,
-            original_name=original_name,
-            modified_name=modified_name,
-            docx_path=new_docx,
-        )
-
-        logger.info(f"PDF comparison report saved: {output_pdf}")
-        return summary
-
-    finally:
-        old_docx.unlink(missing_ok=True)
-        new_docx.unlink(missing_ok=True)
-
-
-def _compare_pdfs_text_based(
-    old_path: Path,
-    new_path: Path,
-    output_pdf: Path,
-    original_name: str,
-    modified_name: str,
-) -> dict:
-    """Fallback: compare PDFs via text extraction + WeasyPrint rendering."""
-    from doccompare.rendering.pdf_renderer import render_pdf
 
     logger.info(f"Extracting text from {old_path.name}")
     old_paras = _extract_paragraphs(old_path)
@@ -776,14 +787,12 @@ def _compare_pdfs_text_based(
     logger.info("Computing diff")
     summary = _compute_summary(old_paras, new_paras)
 
-    logger.info("Rendering HTML")
-    html_content = _render_diff_html(
-        old_paras, new_paras, summary, original_name, modified_name,
+    logger.info("Annotating PDF with changes")
+    _annotate_pdf(
+        new_path, output_pdf,
+        old_paras, new_paras, summary,
+        original_name, modified_name,
     )
-
-    logger.info("Rendering PDF via WeasyPrint")
-    css_path = Path(__file__).parent.parent / "rendering" / "styles.css"
-    render_pdf(html_content, css_path, output_pdf)
 
     logger.info(f"PDF comparison report saved: {output_pdf}")
     return summary
