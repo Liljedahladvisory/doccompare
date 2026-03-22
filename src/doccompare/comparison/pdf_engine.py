@@ -6,14 +6,18 @@ and producing an HTML report with tracked-changes styling rendered via WeasyPrin
 
 Architecture:
   1. Extract paragraphs from both PDFs (pdfplumber + PyMuPDF for font info)
-  2. Match paragraphs via weighted LCS (same algorithm as ooxml_engine)
-  3. Character-level diff on matched pairs (diff_match_patch)
-  4. Build HTML with <span class="added"> / <span class="deleted"> markup
-  5. Render to PDF via WeasyPrint, then merge summary page via pypdf
+  2. Clean up: filter headers/footers, merge cross-page paragraphs
+  3. Strip leading numbering before matching (avoids renumbering noise)
+  4. Match paragraphs via weighted LCS (same algorithm as ooxml_engine)
+  5. Character-level diff on matched pairs (diff_match_patch)
+  6. Build HTML with <span class="added"> / <span class="deleted"> markup
+  7. Render to PDF via WeasyPrint
 """
 
 import html as html_mod
+import re
 import tempfile
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +26,28 @@ from loguru import logger
 from rapidfuzz import fuzz
 
 from doccompare.parsers.pdf_parser import PdfParser
+
+# ── Regex patterns ───────────────────────────────────────────────────────
+
+# Leading numbering: "1.12 ", "12.3.4 ", "(a) ", "(iv) ", "a) " etc.
+_RE_LEADING_NUM = re.compile(
+    r"^(?:"
+    r"\d+(?:\.\d+)*\.?\s+"           # 1.12 or 1.12. or 12.3.4
+    r"|\(\w+\)\s+"                    # (a) or (iv) or (1)
+    r"|\w+\)\s+"                      # a) or iv)
+    r")"
+)
+
+# Headers/footers: document IDs, page numbers, "MATTER X | Y"
+_RE_HEADER_FOOTER = re.compile(
+    r"^\d{5,}v?\d*\s+MATTER\s+\d+"   # "22846400v1 MATTER 3 | 21"
+    r"|^Page\s+\d+\s+of\s+\d+"       # "Page 1 of 42"
+    r"|^\d+\s*$"                       # bare page number
+    r"|^\d+\s*\|\s*\d+"              # "21 | 42" style page numbers
+    r"|^[-–—]\s*\d+\s*[-–—]"         # "- 21 -" style page numbers
+    r"|MATTER\s+\d+\s*\|\s*\d+"      # "MATTER 3 | 21" anywhere
+, re.IGNORECASE)
+
 
 # ── Diff helpers ─────────────────────────────────────────────────────────
 
@@ -33,14 +59,27 @@ def _similarity(a: str, b: str) -> float:
     return fuzz.ratio(a, b) / 100.0
 
 
+def _strip_numbering(text: str) -> str:
+    """Strip leading numbering from text for comparison purposes."""
+    return _RE_LEADING_NUM.sub("", text)
+
+
 def _match_paragraphs(old_paras: list[str], new_paras: list[str]) -> list[tuple[int, int]]:
-    """Weighted LCS matching of paragraph texts."""
+    """Weighted LCS matching of paragraph texts.
+
+    Compares on numbering-stripped text to avoid renumbering noise,
+    but uses original text for the actual diff.
+    """
     n, m = len(old_paras), len(new_paras)
+
+    # Strip numbering for matching to avoid renumbering creating mismatches
+    old_stripped = [_strip_numbering(t) for t in old_paras]
+    new_stripped = [_strip_numbering(t) for t in new_paras]
 
     sim_cache: dict = {}
     for i in range(n):
         for j in range(m):
-            s = _similarity(old_paras[i], new_paras[j])
+            s = _similarity(old_stripped[i], new_stripped[j])
             if s > 0.4:
                 sim_cache[(i, j)] = s
 
@@ -72,13 +111,34 @@ def _match_paragraphs(old_paras: list[str], new_paras: list[str]) -> list[tuple[
 def _diff_paragraph(old_text: str, new_text: str) -> list[tuple[str, str]]:
     """Character-level diff returning [(type, text), ...].
 
-    type is 'equal', 'added', or 'deleted'.
+    Diffs on the numbering-stripped body, then prepends numbering changes
+    as a single unit (avoids character-level noise on "1.11" → "1.12").
     """
-    dmp = dmp_module.diff_match_patch()
-    diffs = dmp.diff_main(old_text, new_text)
-    dmp.diff_cleanupSemantic(diffs)
+    old_num_m = _RE_LEADING_NUM.match(old_text)
+    new_num_m = _RE_LEADING_NUM.match(new_text)
+
+    old_num = old_num_m.group() if old_num_m else ""
+    new_num = new_num_m.group() if new_num_m else ""
+    old_body = old_text[len(old_num):]
+    new_body = new_text[len(new_num):]
 
     result = []
+
+    # Handle numbering change as a single unit
+    if old_num == new_num:
+        if old_num:
+            result.append(("equal", old_num))
+    else:
+        if old_num:
+            result.append(("deleted", old_num))
+        if new_num:
+            result.append(("added", new_num))
+
+    # Diff the body text
+    dmp = dmp_module.diff_match_patch()
+    diffs = dmp.diff_main(old_body, new_body)
+    dmp.diff_cleanupSemantic(diffs)
+
     for op, text in diffs:
         if op == 0:
             result.append(("equal", text))
@@ -89,38 +149,194 @@ def _diff_paragraph(old_text: str, new_text: str) -> list[tuple[str, str]]:
     return result
 
 
-# ── Paragraph extraction ─────────────────────────────────────────────────
+# ── Paragraph extraction & cleanup ───────────────────────────────────────
 
 def _extract_paragraphs(pdf_path: Path) -> list[dict]:
     """Extract paragraphs from a PDF with text and basic formatting info.
 
-    Returns list of dicts: {text, font_size, is_bold, is_italic}.
+    Includes post-processing:
+    - Filter out headers/footers (repeated text across pages, doc IDs, page numbers)
+    - Merge paragraphs broken across page boundaries
+
+    Returns list of dicts: {text, font_size, is_bold, is_italic, page_num}.
     """
-    parser = PdfParser()
-    doc = parser.parse(pdf_path)
+    import pdfplumber
+    import fitz  # PyMuPDF
+
+    fitz_doc = fitz.open(str(pdf_path))
+    raw_paras = []  # list of (text, font_size, page_num)
+
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        num_pages = len(pdf.pages)
+        for page_num, page in enumerate(pdf.pages):
+            lines = page.extract_text_lines() or []
+            if not lines:
+                continue
+
+            # Group lines into paragraphs (same logic as PdfParser)
+            paragraphs = _group_lines(lines)
+
+            for para_text, avg_size in paragraphs:
+                para_text = para_text.strip()
+                if not para_text:
+                    continue
+                raw_paras.append({
+                    "text": para_text,
+                    "font_size": avg_size,
+                    "is_bold": False,
+                    "is_italic": False,
+                    "page_num": page_num,
+                    "element_type": "paragraph",
+                    "level": 0,
+                })
+
+    fitz_doc.close()
+
+    # Step 1: Detect and filter headers/footers
+    paras = _filter_headers_footers(raw_paras, num_pages)
+
+    # Step 2: Merge paragraphs broken across page boundaries
+    paras = _merge_cross_page(paras)
+
+    logger.debug(f"After cleanup: {len(paras)} paragraphs (from {len(raw_paras)} raw)")
+    return paras
+
+
+def _group_lines(lines: list) -> list[tuple[str, float]]:
+    """Group text lines into paragraphs based on vertical spacing.
+
+    Returns [(text, avg_font_size), ...].
+    """
+    if not lines:
+        return []
 
     paragraphs = []
-    for elem in doc.elements:
-        text = elem.plain_text.strip()
-        if not text:
-            continue
-        font_size = None
-        is_bold = False
-        is_italic = False
-        if elem.runs:
-            font_size = elem.runs[0].font_size
-            from doccompare.models import TextFormatting
-            is_bold = TextFormatting.BOLD in elem.runs[0].formatting
-            is_italic = TextFormatting.ITALIC in elem.runs[0].formatting
-        paragraphs.append({
-            "text": text,
-            "font_size": font_size or 11.0,
-            "is_bold": is_bold,
-            "is_italic": is_italic,
-            "element_type": elem.element_type.value,
-            "level": elem.level,
-        })
+    current_texts = []
+    current_sizes = []
+    prev_bottom = None
+
+    for line in lines:
+        top = line.get("top", 0)
+        bottom = line.get("bottom", top + 12)
+        height = bottom - top
+
+        if prev_bottom is not None:
+            gap = top - prev_bottom
+            if gap > height * 0.8:  # Large gap = new paragraph
+                if current_texts:
+                    text = " ".join(current_texts)
+                    avg_size = sum(current_sizes) / len(current_sizes) if current_sizes else 11.0
+                    paragraphs.append((text, avg_size))
+                current_texts = []
+                current_sizes = []
+
+        line_text = line.get("text", "")
+        if line_text:
+            current_texts.append(line_text)
+            chars = line.get("chars", [])
+            if chars:
+                sizes = [c.get("size", 11) for c in chars if c.get("size")]
+                if sizes:
+                    current_sizes.extend(sizes)
+
+        prev_bottom = bottom
+
+    if current_texts:
+        text = " ".join(current_texts)
+        avg_size = sum(current_sizes) / len(current_sizes) if current_sizes else 11.0
+        paragraphs.append((text, avg_size))
+
     return paragraphs
+
+
+def _filter_headers_footers(paras: list[dict], num_pages: int) -> list[dict]:
+    """Remove header/footer lines that repeat across pages.
+
+    Strategy:
+    1. Regex-match obvious patterns (doc IDs, page numbers, "MATTER X | Y")
+    2. Find short texts that appear on many pages (>40% of pages) — likely headers/footers
+    """
+    if num_pages < 2:
+        return paras
+
+    # Count occurrences of short texts across different pages
+    # Normalize: strip digits to catch "Page 1 of 42" / "Page 2 of 42" etc.
+    text_page_sets: dict[str, set[int]] = {}
+    for p in paras:
+        t = p["text"].strip()
+        if len(t) > 80:  # Headers/footers are short
+            continue
+        # Normalize: replace digits with # for pattern matching
+        normalized = re.sub(r"\d+", "#", t)
+        if normalized not in text_page_sets:
+            text_page_sets[normalized] = set()
+        text_page_sets[normalized].add(p["page_num"])
+
+    # Patterns appearing on >40% of pages are headers/footers
+    threshold = max(2, num_pages * 0.4)
+    repeated_patterns = {
+        pat for pat, pages in text_page_sets.items()
+        if len(pages) >= threshold
+    }
+
+    filtered = []
+    removed = 0
+    for p in paras:
+        t = p["text"].strip()
+
+        # Regex filter
+        if _RE_HEADER_FOOTER.search(t):
+            removed += 1
+            continue
+
+        # Repeated pattern filter
+        if len(t) <= 80:
+            normalized = re.sub(r"\d+", "#", t)
+            if normalized in repeated_patterns:
+                removed += 1
+                continue
+
+        filtered.append(p)
+
+    if removed:
+        logger.debug(f"Filtered {removed} header/footer paragraphs")
+    return filtered
+
+
+def _merge_cross_page(paras: list[dict]) -> list[dict]:
+    """Merge paragraphs that were split at page boundaries.
+
+    Heuristic: if a paragraph at page end doesn't end with sentence-ending
+    punctuation and the next paragraph on the next page starts with a
+    lowercase letter, they're likely one paragraph split across pages.
+    """
+    if len(paras) < 2:
+        return paras
+
+    merged = [paras[0]]
+    for i in range(1, len(paras)):
+        prev = merged[-1]
+        curr = paras[i]
+
+        # Only merge across page boundaries
+        if prev["page_num"] != curr["page_num"] and curr["page_num"] == prev["page_num"] + 1:
+            prev_text = prev["text"].rstrip()
+            curr_text = curr["text"].lstrip()
+
+            # Merge if: previous doesn't end with terminal punctuation
+            # AND current starts with lowercase (continuation)
+            if (prev_text and curr_text
+                    and prev_text[-1] not in ".!?:;\"'"
+                    and curr_text[0].islower()):
+                prev["text"] = prev_text + " " + curr_text
+                # Keep the earlier page_num
+                continue
+
+        merged.append(curr)
+
+    if len(merged) < len(paras):
+        logger.debug(f"Merged {len(paras) - len(merged)} cross-page paragraph breaks")
+    return merged
 
 
 # ── HTML generation ──────────────────────────────────────────────────────
@@ -154,23 +370,12 @@ def _render_diff_html(
     matched_new = {j for _, j in matches}
 
     # Build an ordered list of output paragraphs
-    # Walk through new paragraphs in order, inserting deleted old paragraphs
-    # at the right positions
     output_parts = []
-
-    # Create a map: for each new index, which old index is it matched to?
     new_to_old = {j: i for i, j in matches}
-
-    # Track which old paragraphs we've output (as deletions)
     old_output = set()
-
-    # Walk through matches to find deletion insertion points
-    # Between consecutive matched pairs (oi1, nj1) and (oi2, nj2),
-    # any unmatched old paragraphs in range (oi1, oi2) are deletions.
     prev_old_idx = -1
 
     for nj in range(len(new_paras)):
-        # Before this new paragraph, insert any unmatched old paragraphs
         if nj in new_to_old:
             oi = new_to_old[nj]
             # Insert deletions: unmatched old paragraphs between prev_old_idx and oi
@@ -192,7 +397,6 @@ def _render_diff_html(
             style_attr = f' style="{css}"' if css else ""
 
             spans = []
-            all_equal = all(seg_type == "equal" for seg_type, _ in diff_segments)
             for seg_type, seg_text in diff_segments:
                 escaped = html_mod.escape(seg_text)
                 if seg_type == "equal":
