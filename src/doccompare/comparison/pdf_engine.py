@@ -396,284 +396,178 @@ def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
     }
 
 
-# -- PDF-native diff rendering ------------------------------------------------
+# -- PDF comparison via DOCX conversion ----------------------------------------
 #
-# Strategy: work at the SPAN level to avoid cross-span corruption.
-# 1. Extract all text spans per page (with positions, fonts, sizes)
-# 2. Map paragraphs to spans via text matching
-# 3. Align diff segments to individual spans
-# 4. Redact + rewrite ONLY the specific spans that are "added" (blue)
-# 5. Insert deleted text (red) at the correct position
-
-_BLUE = (0.18, 0.59, 0.83)    # #2e97d3 -- additions (matches Word)
-_RED = (0.71, 0.03, 0.18)     # #b5082e -- deletions (matches Word)
+# Strategy: convert both PDFs to DOCX (via pdf2docx), then use the same
+# OOXML track-changes engine that works perfectly for .docx files.
+# This gives identical visual output: inline blue additions, red deletions,
+# proper text reflow, and Word's native rendering.
+#
+# Pipeline: PDF → DOCX (pdf2docx) → cleanup section breaks → OOXML compare
+#           → Word headless PDF export → merge summary page
 
 
-def _extract_fonts(doc) -> dict:
-    """Extract embedded fonts from the PDF for text rewriting."""
-    import fitz
+def _pdf_to_docx(pdf_path: Path) -> Path:
+    """Convert a PDF to DOCX using pdf2docx, then clean up artifacts."""
+    import tempfile
+    from pdf2docx import Converter
 
-    font_map = {}
-    for page_idx in range(len(doc)):
-        page = doc[page_idx]
-        for f in page.get_fonts(full=True):
-            xref = f[0]
-            name = f[3]
-            base = name.split("+")[-1] if "+" in name else name
-            if base in font_map:
-                continue
-            try:
-                buf = doc.extract_font(xref)[-1]
-                if buf:
-                    font_map[base] = fitz.Font(fontbuffer=buf)
-            except Exception:
-                pass
-    return font_map
+    # Create temp DOCX in a safe location
+    tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False,
+                                      prefix="doccompare_")
+    tmp.close()
+    docx_path = Path(tmp.name)
 
+    logger.info(f"Converting {pdf_path.name} to DOCX via pdf2docx")
+    cv = Converter(str(pdf_path))
+    cv.convert(str(docx_path))
+    cv.close()
 
-def _get_font(font_map: dict, font_name: str):
-    """Look up a font, falling back to base-name matching then Helvetica."""
-    import fitz
+    # Comprehensive cleanup of pdf2docx artifacts
+    _cleanup_pdf2docx_artifacts(docx_path)
 
-    base = font_name.split("+")[-1] if "+" in font_name else font_name
-    if base in font_map:
-        return font_map[base]
-
-    for name, font in font_map.items():
-        if name.lower() == base.lower():
-            return font
-
-    try:
-        return fitz.Font("helv")
-    except Exception:
-        return None
+    return docx_path
 
 
-def _get_page_spans(page) -> list[dict]:
-    """Extract a flat list of text spans from a page."""
-    spans = []
-    td = page.get_text("dict")
-    for block in td.get("blocks", []):
-        if "lines" not in block:
-            continue
-        for line in block["lines"]:
-            for span in line["spans"]:
-                if span.get("text"):
-                    spans.append({
-                        "text": span["text"],
-                        "font": span["font"],
-                        "size": span["size"],
-                        "bbox": span["bbox"],
-                        "origin": span.get("origin",
-                                           (span["bbox"][0], span["bbox"][3])),
-                    })
-    return spans
+# Patterns that match header/footer text embedded by pdf2docx
+_RE_HF_PATTERNS = [
+    re.compile(r"^\d{5,}v?\d*\s+MATTER\s+\d+", re.IGNORECASE),    # "22846400v1 MATTER 3 | 21"
+    re.compile(r"^Page\s+\d+\s+of\s+\d+", re.IGNORECASE),          # "Page 1 of 42"
+    re.compile(r"^\d+\s*\|\s*\d+\s*$"),                              # "21 | 42"
+    re.compile(r"^[-\u2013\u2014]\s*\d+\s*[-\u2013\u2014]\s*$"),    # "- 21 -"
+    re.compile(r"^MATTER\s+\d+\s*\|\s*\d+", re.IGNORECASE),         # "MATTER 3 | 21"
+    re.compile(r"^\d{1,4}\s*$"),                                      # bare page number
+]
 
 
-def _fuzzy_find(haystack: str, needle: str) -> int:
-    """Find needle in haystack, tolerating whitespace differences."""
-    # Exact match first
-    pos = haystack.find(needle)
-    if pos >= 0:
-        return pos
-
-    # Try with normalized whitespace
-    needle_norm = " ".join(needle.split())
-    pos = haystack.find(needle_norm)
-    if pos >= 0:
-        return pos
-
-    # Try first 30 chars
-    if len(needle) > 30:
-        short = needle[:30]
-        pos = haystack.find(short)
-        if pos >= 0:
-            return pos
-
-    return -1
+def _is_header_footer_text(text: str) -> bool:
+    """Check if text looks like a PDF header or footer."""
+    t = text.strip()
+    if not t or len(t) > 100:
+        return False
+    return any(pat.search(t) for pat in _RE_HF_PATTERNS)
 
 
-def _apply_native_diff(doc, old_paras, new_paras, font_map):
-    """Apply diff colors at the SPAN level for precision.
+def _cleanup_pdf2docx_artifacts(docx_path: Path):
+    """Comprehensive cleanup of pdf2docx conversion artifacts.
 
-    For each page:
-    1. Get all spans with positions
-    2. Build flat text + char-to-span mapping
-    3. Match changed paragraphs to span positions
-    4. Align diff segments to spans
-    5. Batch redact + rewrite recolored spans
-    6. Insert deleted text at the correct position
+    Fixes:
+      1. Per-page w:sectPr (section breaks) → removed (keeps body-level only)
+      2. Explicit page breaks (w:br type="page") → removed
+      3. w:lastRenderedPageBreak → removed (rendering hint that forces breaks)
+      4. w:pageBreakBefore in paragraph properties → removed
+      5. Header/footer text embedded as body paragraphs → removed
+      6. Empty paragraphs left behind → removed
+      7. Excessive w:spacing (before/after > 400 twips) → capped
     """
-    import fitz
+    import zipfile
+    import os
+    from lxml import etree
 
-    old_texts = [p["text"] for p in old_paras]
-    new_texts = [p["text"] for p in new_paras]
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
-    matches = _match_paragraphs(old_texts, new_texts)
-    matched_old = {i for i, _ in matches}
-    matched_new = {j for _, j in matches}
+    with zipfile.ZipFile(str(docx_path)) as z:
+        doc_xml = z.read("word/document.xml")
 
-    # Build per-paragraph diff data
-    para_diffs = {}  # new_para_idx -> segments
-    for oi, nj in matches:
-        segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
-        if any(t != "equal" for t, _ in segments):
-            para_diffs[nj] = segments
+    root = etree.fromstring(doc_xml)
+    body = root.find(f"{{{W}}}body")
+    if body is None:
+        return
 
-    # Entirely new paragraphs: all text is "added"
-    for j in range(len(new_paras)):
-        if j not in matched_new:
-            para_diffs[j] = [("added", new_paras[j]["text"])]
+    stats = {"sectPr": 0, "pageBr": 0, "lastRendered": 0,
+             "breakBefore": 0, "headerFooter": 0, "emptyPara": 0,
+             "spacingCapped": 0}
 
-    # Group changes by page
-    page_changes = {}  # page_idx -> [(new_para_idx, segments), ...]
-    for nj, segments in para_diffs.items():
-        pg = new_paras[nj].get("page_num", 0)
-        page_changes.setdefault(pg, []).append((nj, segments))
+    # --- 1. Remove paragraph-level section breaks ---
+    for ppr in body.findall(f".//{{{W}}}pPr"):
+        sect = ppr.find(f"{{{W}}}sectPr")
+        if sect is not None:
+            ppr.remove(sect)
+            stats["sectPr"] += 1
 
-    # Process each page
-    for page_idx in sorted(page_changes.keys()):
-        if page_idx >= len(doc):
+    # --- 2. Remove explicit page breaks (w:br type="page") ---
+    for br in body.findall(f".//{{{W}}}br"):
+        br_type = br.get(f"{{{W}}}type", "")
+        if br_type == "page":
+            br.getparent().remove(br)
+            stats["pageBr"] += 1
+
+    # --- 3. Remove w:lastRenderedPageBreak ---
+    for lrpb in body.findall(f".//{{{W}}}lastRenderedPageBreak"):
+        lrpb.getparent().remove(lrpb)
+        stats["lastRendered"] += 1
+
+    # --- 4. Remove w:pageBreakBefore ---
+    for pbb in body.findall(f".//{{{W}}}pageBreakBefore"):
+        pbb.getparent().remove(pbb)
+        stats["breakBefore"] += 1
+
+    # --- 5. Remove header/footer paragraphs ---
+    for p in list(body):
+        if p.tag != f"{{{W}}}p":
             continue
+        # Collect all text in the paragraph
+        texts = [t.text or "" for t in p.findall(f".//{{{W}}}t")]
+        full_text = "".join(texts).strip()
+        if full_text and _is_header_footer_text(full_text):
+            body.remove(p)
+            stats["headerFooter"] += 1
 
-        page = doc[page_idx]
-        changes = page_changes[page_idx]
-
-        # Get all spans on this page
-        spans = _get_page_spans(page)
-        if not spans:
+    # --- 6. Remove empty paragraphs (no text, no runs, or empty pPr only) ---
+    for p in list(body):
+        if p.tag != f"{{{W}}}p":
             continue
-
-        # Build flat text and char-to-span index
-        flat_text = ""
-        char_to_span = []
-        for si, sp in enumerate(spans):
-            txt = sp["text"]
-            flat_text += txt
-            char_to_span.extend([si] * len(txt))
-
-        # Track which spans need recoloring (blue for added)
-        recolor_spans = set()  # span indices to recolor blue
-
-        # Track deletions to insert
-        deletions_to_insert = []  # (deleted_text, anchor_span_idx)
-
-        for nj, segments in changes:
-            # Build the "new text" (what exists in the PDF = equal + added)
-            new_text = "".join(t for st, t in segments if st != "deleted")
-
-            # Find where this paragraph starts in the page's flat text
-            search_key = new_text[:60] if len(new_text) > 60 else new_text
-            start = _fuzzy_find(flat_text, search_key)
-            if start < 0:
-                logger.debug(f"Could not find para on page {page_idx}: "
-                             f"{new_text[:40]}...")
-                continue
-
-            # Walk through segments, mapping to flat_text positions
-            flat_pos = start
-            for seg_type, seg_text in segments:
-                if seg_type == "deleted":
-                    # Record deletion with its anchor position
-                    if seg_text.strip() and flat_pos < len(char_to_span):
-                        anchor_si = char_to_span[flat_pos]
-                        deletions_to_insert.append((seg_text, anchor_si))
-                    continue
-
-                # equal or added: these characters exist in flat_text
-                seg_len = len(seg_text)
-                if seg_type == "added":
-                    # Mark all spans covering this range
-                    for ci in range(seg_len):
-                        fp = flat_pos + ci
-                        if fp < len(char_to_span):
-                            recolor_spans.add(char_to_span[fp])
-
-                flat_pos += seg_len
-
-        # --- Apply changes to the page ---
-
-        if not recolor_spans and not deletions_to_insert:
+        has_text = any((t.text or "").strip()
+                       for t in p.findall(f".//{{{W}}}t"))
+        if has_text:
             continue
+        # Keep paragraphs that have drawing/image content
+        if p.findall(f".//{{{W}}}drawing") or p.findall(".//{http://schemas.openxmlformats.org/drawingml/2006/main}blip"):
+            continue
+        runs = p.findall(f"{{{W}}}r")
+        # Check if runs have any non-whitespace content
+        run_has_content = False
+        for r in runs:
+            for child in r:
+                if child.tag == f"{{{W}}}t" and (child.text or "").strip():
+                    run_has_content = True
+                    break
+                # Drawing/image in run
+                if child.tag == f"{{{W}}}drawing":
+                    run_has_content = True
+                    break
+        if run_has_content:
+            continue
+        # Empty paragraph — remove if it has no meaningful properties
+        ppr = p.find(f"{{{W}}}pPr")
+        if ppr is None or len(ppr) == 0:
+            body.remove(p)
+            stats["emptyPara"] += 1
 
-        # Step 1: Redact all spans that need recoloring
-        for si in recolor_spans:
-            sp = spans[si]
-            r = fitz.Rect(sp["bbox"])
-            annot = page.add_redact_annot(r, text="")
-            annot.set_colors(stroke=None, fill=(1, 1, 1))  # white fill, no border
-            annot.update()
+    # --- 7. Cap excessive spacing ---
+    MAX_SPACING = 400  # twips (~7mm); normal paragraph spacing is 60-240
+    for spacing in body.findall(f".//{{{W}}}spacing"):
+        for attr in ["before", "after"]:
+            val = spacing.get(f"{{{W}}}{attr}")
+            if val and val.isdigit() and int(val) > MAX_SPACING:
+                spacing.set(f"{{{W}}}{attr}", str(MAX_SPACING))
+                stats["spacingCapped"] += 1
 
-        if recolor_spans:
-            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+    # --- Write back to DOCX zip ---
+    new_xml = etree.tostring(root, xml_declaration=True,
+                              encoding="UTF-8", standalone=True)
 
-        # Step 2: Rewrite recolored spans in blue
-        for si in recolor_spans:
-            sp = spans[si]
-            font = _get_font(font_map, sp["font"])
-            if not font:
-                continue
+    tmp_path = str(docx_path) + ".tmp"
+    with zipfile.ZipFile(str(docx_path), "r") as zin:
+        with zipfile.ZipFile(tmp_path, "w") as zout:
+            for item in zin.infolist():
+                if item.filename == "word/document.xml":
+                    zout.writestr(item, new_xml)
+                else:
+                    zout.writestr(item, zin.read(item.filename))
 
-            tw = fitz.TextWriter(page.rect)
-            origin = fitz.Point(sp["origin"][0], sp["origin"][1])
-            try:
-                tw.append(origin, sp["text"], font=font, fontsize=sp["size"])
-                tw.write_text(page, color=_BLUE)
-            except Exception as e:
-                logger.debug(f"Rewrite failed for span: {e}")
-
-            # Add underline annotation
-            try:
-                r = fitz.Rect(sp["bbox"])
-                annot = page.add_underline_annot(r)
-                annot.set_colors(stroke=list(_BLUE))
-                annot.update()
-            except Exception:
-                pass
-
-        # Step 3: Insert deleted text in red with strikethrough
-        for del_text, anchor_si in deletions_to_insert:
-            if not del_text.strip():
-                continue
-
-            anchor = spans[anchor_si]
-            font = _get_font(font_map, anchor["font"])
-            if not font:
-                continue
-
-            text_to_write = del_text.strip()
-            if len(text_to_write) > 200:
-                text_to_write = text_to_write[:200] + "..."
-
-            fontsize = anchor["size"]
-            text_length = font.text_length(text_to_write, fontsize=fontsize)
-            is_short = len(text_to_write) < 20  # short = numbering etc.
-
-            # Positioning: short deletions go on the line ABOVE at same x
-            # (right above the new numbering). Long deletions also above.
-            x = anchor["bbox"][0]
-            y = anchor["origin"][1] - fontsize - 2
-
-            if y < 15:
-                continue
-
-            try:
-                tw = fitz.TextWriter(page.rect)
-                tw.append(fitz.Point(x, y), text_to_write,
-                          font=font, fontsize=fontsize)
-                tw.write_text(page, color=_RED)
-
-                # Strikethrough annotation over the red text
-                strike_rect = fitz.Rect(
-                    x, y - fontsize + 2,
-                    min(x + text_length, page.rect.width - 15),
-                    y + 3,
-                )
-                annot = page.add_strikeout_annot(strike_rect)
-                annot.set_colors(stroke=list(_RED))
-                annot.update()
-            except Exception as e:
-                logger.debug(f"Insert deletion failed: {e}")
+    os.replace(tmp_path, str(docx_path))
+    logger.debug(f"pdf2docx cleanup: {stats}")
 
 
 # -- Public API ---------------------------------------------------------------
@@ -685,18 +579,19 @@ def compare_pdfs(
     original_name: str | None = None,
     modified_name: str | None = None,
 ):
-    """Compare two PDFs preserving original layout and formatting.
+    """Compare two PDFs via DOCX conversion + OOXML track-changes engine.
 
-    Uses the new PDF as the visual base:
-    - Added text marked with blue underline (in-place)
-    - Deleted text inserted as red annotations
-    - 100% of original formatting, fonts, and layout preserved
-    - Summary/legend page appended at the end.
+    Pipeline:
+      1. Convert both PDFs to DOCX (pdf2docx)
+      2. Clean up per-page section breaks
+      3. Run OOXML comparison (same engine as .docx files)
+      4. Export to PDF via Word headless
+      5. Append summary/legend page
 
     Returns summary dict with word counts.
     """
-    import fitz
-    import tempfile
+    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+    from doccompare.rendering.pdf_pipeline import produce_pdf
 
     old_path = Path(old_path)
     new_path = Path(new_path)
@@ -705,49 +600,38 @@ def compare_pdfs(
     original_name = original_name or old_path.name
     modified_name = modified_name or new_path.name
 
-    logger.info(f"Extracting text from {old_path.name}")
-    old_paras = _extract_paragraphs(old_path)
-    logger.info(f"Extracted {len(old_paras)} paragraphs from original")
-
-    logger.info(f"Extracting text from {new_path.name}")
-    new_paras = _extract_paragraphs(new_path)
-    logger.info(f"Extracted {len(new_paras)} paragraphs from modified")
-
-    logger.info("Computing diff")
-    summary = _compute_summary(old_paras, new_paras)
-
-    logger.info("Applying diff annotations to PDF")
-    doc = fitz.open(str(new_path))
-    font_map = _extract_fonts(doc)
-
-    _apply_native_diff(doc, old_paras, new_paras, font_map)
-
-    annotated_bytes = doc.tobytes()
-    doc.close()
-
-    # Collect fully deleted paragraphs for summary page
-    old_texts = [p["text"] for p in old_paras]
-    new_texts = [p["text"] for p in new_paras]
-    matches = _match_paragraphs(old_texts, new_texts)
-    matched_old = {i for i, _ in matches}
-    deletions = [old_paras[i]["text"] for i in range(len(old_paras))
-                 if i not in matched_old]
-
-    # Generate summary page and merge
-    from doccompare.rendering.pdf_pipeline import _render_summary_pdf, _merge_pdfs
-
-    summary_bytes = _render_summary_pdf(
-        summary, original_name, modified_name, deletions=deletions,
-    )
-
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(annotated_bytes)
-        tmp_path = Path(tmp.name)
+    # Step 1-2: Convert PDFs to DOCX
+    old_docx = _pdf_to_docx(old_path)
+    new_docx = _pdf_to_docx(new_path)
 
     try:
-        _merge_pdfs(tmp_path, summary_bytes, output_pdf)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+        # Step 3: OOXML comparison (same engine as .docx files)
+        import tempfile
+        result_tmp = tempfile.NamedTemporaryFile(
+            suffix=".docx", delete=False, prefix="doccompare_result_"
+        )
+        result_tmp.close()
+        result_docx = Path(result_tmp.name)
 
-    logger.info(f"PDF comparison report saved: {output_pdf}")
-    return summary
+        logger.info("Running OOXML comparison on converted documents")
+        doc_tree, summary = ooxml_compare(
+            str(old_docx), str(new_docx), str(result_docx),
+        )
+
+        # Step 4-5: Export to PDF via Word + summary page
+        logger.info("Producing PDF via Word headless export")
+        produce_pdf(
+            doc_tree, output_pdf, summary,
+            original_name, modified_name,
+            docx_path=str(result_docx),
+        )
+
+        logger.info(f"PDF comparison report saved: {output_pdf}")
+        return summary
+
+    finally:
+        # Clean up temp files
+        old_docx.unlink(missing_ok=True)
+        new_docx.unlink(missing_ok=True)
+        if "result_docx" in locals():
+            result_docx.unlink(missing_ok=True)
