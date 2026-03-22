@@ -797,47 +797,39 @@ def render_tracked_changes_html(
 </html>"""
 
 
+def _ensure_cache_dir() -> Path:
+    """Return ~/Library/Caches/DocCompare/, creating it if needed.
+
+    Word has full access to ~/Library/ (no sandbox permission dialogs).
+    """
+    d = Path.home() / "Library" / "Caches" / "DocCompare"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _word_to_pdf_headless(docx_path: Path, pdf_path: Path) -> bool:
     """Convert .docx to PDF using Microsoft Word via AppleScript (headless).
 
+    No System Events, no activate — Word stays in the background.
+    Temp files go to ~/Library/Caches/DocCompare/ to avoid sandbox dialogs.
     Returns True on success, False if Word is unavailable.
     """
     docx_abs = str(docx_path.resolve())
     pdf_abs = str(pdf_path.resolve())
 
-    # AppleScript: launch Word hidden, open doc, save as PDF, close, restore state.
-    # Uses System Events to keep Word invisible throughout.
+    # AppleScript: use 'open ... without activate' pattern.
+    # No System Events (avoids permission dialog).
+    # No 'activate' (Word stays in background).
     script = f'''
-    -- Hide Word immediately if it launches
-    tell application "System Events"
-        set wordWasRunning to (name of every process) contains "Microsoft Word"
-    end tell
-
     tell application "Microsoft Word"
+        -- 'open' without 'activate' keeps Word in the background
         open POSIX file "{docx_abs}" as alias
-    end tell
-
-    -- Immediately hide Word so it never appears on screen
-    tell application "System Events"
-        try
-            set visible of process "Microsoft Word" to false
-        end try
-    end tell
-
-    -- Small delay for the document to load
-    delay 1
-
-    tell application "Microsoft Word"
+        delay 1
         set theDoc to active document
         set outputPath to POSIX file "{pdf_abs}" as text
         save as theDoc file name outputPath file format format PDF
         close theDoc saving no
     end tell
-
-    -- If Word was not running before, quit it
-    if not wordWasRunning then
-        tell application "Microsoft Word" to quit
-    end if
     '''
 
     try:
@@ -941,8 +933,9 @@ def _render_summary_pdf(summary: dict, original_name: str, modified_name: str) -
 </body>
 </html>"""
 
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
+    cache_dir = _ensure_cache_dir()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    tmp_path = cache_dir / f"summary_{ts}.pdf"
     try:
         render_pdf(html_content, css_path, tmp_path)
         return tmp_path.read_bytes()
@@ -987,43 +980,38 @@ def produce_pdf(
 
     output_pdf = Path(output_pdf)
 
-    # Step 1: Write tracked-changes .docx to a temp file
-    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_docx:
-        tmp_docx_path = Path(tmp_docx.name)
+    # Use ~/Library/Caches/DocCompare/ for temp files — Word has full access
+    # (avoids macOS sandbox "grant file access" dialogs)
+    cache_dir = _ensure_cache_dir()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    tmp_docx_path = cache_dir / f"tc_{ts}.docx"
+    tmp_pdf_path = cache_dir / f"tc_{ts}.pdf"
 
     try:
-        # Write the modified XML tree into a copy of the source docx
+        # Step 1: Write tracked-changes .docx
         if docx_path:
             _write_docx(Path(docx_path), tmp_docx_path, doc_tree)
         else:
-            # No source docx — fall back to WeasyPrint
             return _produce_pdf_weasyprint(
                 doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
             )
 
         # Step 2: Convert to PDF via Word (headless)
-        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
-            tmp_pdf_path = Path(tmp_pdf.name)
+        word_ok = _word_to_pdf_headless(tmp_docx_path, tmp_pdf_path)
+        if not word_ok:
+            return _produce_pdf_weasyprint(
+                doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
+            )
 
-        try:
-            word_ok = _word_to_pdf_headless(tmp_docx_path, tmp_pdf_path)
-            if not word_ok:
-                # Fall back to WeasyPrint
-                return _produce_pdf_weasyprint(
-                    doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
-                )
+        # Step 3: Render summary/legend page
+        summary_bytes = _render_summary_pdf(summary, original_name, modified_name)
 
-            # Step 3: Render summary/legend page
-            summary_bytes = _render_summary_pdf(summary, original_name, modified_name)
-
-            # Step 4: Merge
-            _merge_pdfs(tmp_pdf_path, summary_bytes, output_pdf)
-
-        finally:
-            tmp_pdf_path.unlink(missing_ok=True)
+        # Step 4: Merge
+        _merge_pdfs(tmp_pdf_path, summary_bytes, output_pdf)
 
     finally:
         tmp_docx_path.unlink(missing_ok=True)
+        tmp_pdf_path.unlink(missing_ok=True)
 
 
 def _produce_pdf_weasyprint(
