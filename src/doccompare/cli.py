@@ -8,6 +8,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
+SUPPORTED_FORMATS = {".docx", ".pdf"}
+
 
 @click.command()
 @click.argument("original", type=click.Path(exists=True, path_type=Path))
@@ -27,17 +29,16 @@ console = Console()
 )
 @click.version_option(package_name="doccompare")
 def compare(original: Path, modified: Path, output: Path, author: str, verbose: bool):
-    """Compare two .docx files and generate a PDF with tracked changes.
+    """Compare two documents and generate a PDF diff report.
 
     ORIGINAL is the older version, MODIFIED is the newer version.
-    The engine diffs the OOXML trees natively, then renders the tracked
-    changes directly to PDF. No external applications required.
+    Supports .docx and .pdf files. Both files must be the same format.
 
     Examples:
 
         doccompare original.docx modified.docx
 
-        doccompare v1.docx v2.docx -o diff.pdf
+        doccompare v1.pdf v2.pdf -o diff.pdf
 
         doccompare draft.docx final.docx --author "Jane Doe"
     """
@@ -45,39 +46,74 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
         logger.remove()
         logger.add(sys.stderr, level="WARNING")
 
+    orig_ext = original.suffix.lower()
+    mod_ext = modified.suffix.lower()
+
     for path in [original, modified]:
-        if path.suffix.lower() != ".docx":
-            click.echo(f"Error: Unsupported format '{path.suffix}'. Only .docx is supported.", err=True)
+        if path.suffix.lower() not in SUPPORTED_FORMATS:
+            click.echo(
+                f"Error: Unsupported format '{path.suffix}'. "
+                f"Supported: {', '.join(sorted(SUPPORTED_FORMATS))}",
+                err=True,
+            )
             sys.exit(1)
+
+    if orig_ext != mod_ext:
+        click.echo(
+            f"Error: Both files must be the same format. "
+            f"Got '{orig_ext}' and '{mod_ext}'.",
+            err=True,
+        )
+        sys.exit(1)
 
     if output is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         output = Path(f"comparison_{ts}.pdf")
 
-    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-    from doccompare.rendering.pdf_pipeline import produce_pdf
-
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
-        task = progress.add_task("Jämför dokument…", total=None)
+        task = progress.add_task("Comparing documents\u2026", total=None)
         try:
-            # Step 1: OOXML comparison → modified XML tree with track changes
-            doc_tree, summary = ooxml_compare(original, modified, None, author=author)
-
-            # Step 2: Render directly to PDF (no temp files, no Word)
-            progress.update(task, description="Renderar PDF…")
-            produce_pdf(
-                doc_tree, output, summary,
-                original_name=original.name,
-                modified_name=modified.name,
-                docx_path=modified,
-            )
+            if orig_ext == ".docx":
+                summary = _compare_docx(original, modified, output, author, progress, task)
+            else:
+                summary = _compare_pdf(original, modified, output, progress, task)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
         progress.update(task, description="Done!", completed=1, total=1)
 
     s = summary
-    console.print(f"\n[bold]Jämförelse klar![/bold] Rapport sparad: [cyan]{output}[/cyan]")
-    console.print(f"  [green]+{s.get('added_words', 0)} ord tillagda[/green]  "
-                  f"[red]-{s.get('deleted_words', 0)} ord borttagna[/red]  "
-                  f"[dim]{s.get('unchanged_words', 0)} ord oförändrade[/dim]")
+    console.print(f"\n[bold]Comparison complete![/bold] Report saved: [cyan]{output}[/cyan]")
+    console.print(f"  [green]+{s.get('added_words', 0)} words added[/green]  "
+                  f"[red]-{s.get('deleted_words', 0)} words deleted[/red]  "
+                  f"[dim]{s.get('unchanged_words', 0)} words unchanged[/dim]")
+
+
+def _compare_docx(original, modified, output, author, progress, task):
+    """DOCX comparison via OOXML engine + Word headless PDF export."""
+    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+    from doccompare.rendering.pdf_pipeline import produce_pdf
+
+    doc_tree, summary = ooxml_compare(original, modified, None, author=author)
+
+    progress.update(task, description="Rendering PDF\u2026")
+    produce_pdf(
+        doc_tree, output, summary,
+        original_name=original.name,
+        modified_name=modified.name,
+        docx_path=modified,
+    )
+    return summary
+
+
+def _compare_pdf(original, modified, output, progress, task):
+    """PDF comparison via text extraction + diff_match_patch."""
+    from doccompare.comparison.pdf_engine import compare_pdfs
+
+    progress.update(task, description="Comparing PDFs\u2026")
+    summary = compare_pdfs(
+        original, modified, output,
+        original_name=original.name,
+        modified_name=modified.name,
+    )
+    return summary

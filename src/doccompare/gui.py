@@ -151,7 +151,7 @@ class DocCompareApp:
         badge.pack(side="left", padx=(12, 0), pady=(8, 0))
 
         tk.Label(
-            outer, text="Compare two documents and generate a PDF diff report",
+            outer, text="Compare .docx or .pdf documents and generate a diff report",
             font=(FONT, 12), bg=BG, fg=SUBTITLE,
         ).pack(anchor="w", pady=(0, 20))
 
@@ -279,7 +279,7 @@ class DocCompareApp:
     def _pick_original(self):
         path = filedialog.askopenfilename(
             title="Select original document",
-            filetypes=[("Word", "*.docx")],
+            filetypes=[("Documents", "*.docx *.pdf"), ("Word", "*.docx"), ("PDF", "*.pdf")],
         )
         if path:
             self.original_path = Path(path)
@@ -291,7 +291,7 @@ class DocCompareApp:
     def _pick_modified(self):
         path = filedialog.askopenfilename(
             title="Select modified document",
-            filetypes=[("Word", "*.docx")],
+            filetypes=[("Documents", "*.docx *.pdf"), ("Word", "*.docx"), ("PDF", "*.pdf")],
         )
         if path:
             self.modified_path = Path(path)
@@ -317,6 +317,24 @@ class DocCompareApp:
 
     def _update_button_state(self):
         if self.original_path and self.modified_path:
+            # Check format match
+            ext1 = self.original_path.suffix.lower()
+            ext2 = self.modified_path.suffix.lower()
+            if ext1 != ext2:
+                self.status_label.config(
+                    text=f"Both files must be the same format ({ext1} \u2260 {ext2})",
+                    fg=ERROR,
+                )
+                self._style_button_disabled()
+                return
+            if ext1 not in (".docx", ".pdf"):
+                self.status_label.config(
+                    text=f"Unsupported format: {ext1}",
+                    fg=ERROR,
+                )
+                self._style_button_disabled()
+                return
+            self.status_label.config(text="", fg=SUBTITLE)
             self.compare_btn.config(
                 state="normal", bg=ACCENT,
                 disabledforeground=DISABLED_FG,
@@ -343,21 +361,33 @@ class DocCompareApp:
 
         def worker():
             try:
-                from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-                from doccompare.rendering.pdf_pipeline import produce_pdf
+                ext = self.original_path.suffix.lower()
 
-                set_status("Comparing documents\u2026")
-                doc_tree, summary = ooxml_compare(
-                    self.original_path, self.modified_path, None,
-                )
+                if ext == ".docx":
+                    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+                    from doccompare.rendering.pdf_pipeline import produce_pdf
 
-                set_status("Rendering PDF\u2026")
-                produce_pdf(
-                    doc_tree, output, summary,
-                    original_name=self.original_path.name,
-                    modified_name=self.modified_path.name,
-                    docx_path=self.modified_path,
-                )
+                    set_status("Comparing documents\u2026")
+                    doc_tree, summary = ooxml_compare(
+                        self.original_path, self.modified_path, None,
+                    )
+
+                    set_status("Rendering PDF\u2026")
+                    produce_pdf(
+                        doc_tree, output, summary,
+                        original_name=self.original_path.name,
+                        modified_name=self.modified_path.name,
+                        docx_path=self.modified_path,
+                    )
+                else:
+                    from doccompare.comparison.pdf_engine import compare_pdfs
+
+                    set_status("Extracting text from PDFs\u2026")
+                    summary = compare_pdfs(
+                        self.original_path, self.modified_path, output,
+                        original_name=self.original_path.name,
+                        modified_name=self.modified_path.name,
+                    )
 
                 s = summary
                 msg = (
