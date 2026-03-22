@@ -594,11 +594,13 @@ def _annotate_pdf(
     original_name: str,
     modified_name: str,
 ):
-    """Annotate the newer PDF directly with diff highlights.
+    """Annotate the newer PDF with blue underlines on new/changed text.
 
-    - Added text: blue underline highlight
-    - Deleted text: red margin comments
-    - Preserves 100% of original PDF formatting.
+    Clean and simple:
+    - Blue underline on added/changed text
+    - Nothing else on the document itself
+    - Deleted text listed on the summary page
+    - 100% of original formatting preserved.
     """
     import fitz  # PyMuPDF
 
@@ -608,70 +610,44 @@ def _annotate_pdf(
     new_texts = [p["text"] for p in new_paras]
 
     matches = _match_paragraphs(old_texts, new_texts)
-    matched_old = {i for i, _ in matches}
     matched_new = {j for _, j in matches}
 
-    # Annotation colors
-    BLUE = (0.0, 0.28, 0.67)       # Blue for underlines on changed text
-    YELLOW = (1.0, 0.95, 0.6)      # Soft yellow for new paragraph highlights
+    BLUE = (0.0, 0.28, 0.67)
 
-    # Track annotations added per page for comment positioning
-    page_comment_y: dict[int, float] = {}
+    # Collect deleted text for the summary page
+    deletions = []
 
-    # Process matched pairs — find changed segments
+    # Matched pairs — underline added segments
     for oi, nj in matches:
         diff_segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
 
-        has_changes = any(st != "equal" for st, _ in diff_segments)
-        if not has_changes:
-            continue
-
-        # Collect added and deleted text for this paragraph
-        added_parts = []
-        deleted_parts = []
         for seg_type, seg_text in diff_segments:
             if seg_type == "added":
-                added_parts.append(seg_text)
+                _underline_text(doc, seg_text, BLUE)
             elif seg_type == "deleted":
-                deleted_parts.append(seg_text)
+                deletions.append(seg_text)
 
-        # Underline added text in blue (inline changes)
-        for added_text in added_parts:
-            _underline_text(doc, added_text, BLUE)
-
-        # Add deleted text as margin comments
-        if deleted_parts:
-            deleted_combined = " [...] ".join(deleted_parts)
-            new_text_snippet = new_paras[nj]["text"][:60]
-            _add_deletion_comment(doc, new_text_snippet, deleted_combined, page_comment_y)
-
-    # Mark entirely new paragraphs with soft yellow highlight
+    # Entirely new paragraphs — underline them
     for j in range(len(new_paras)):
         if j not in matched_new:
-            text = new_paras[j]["text"]
-            _highlight_text(doc, text, YELLOW)
+            _underline_text(doc, new_paras[j]["text"], BLUE)
 
-    # Mark entirely deleted paragraphs (unmatched in old)
-    deleted_whole = []
+    # Collect entirely deleted paragraphs for summary
+    matched_old = {i for i, _ in matches}
     for i in range(len(old_paras)):
         if i not in matched_old:
-            deleted_whole.append(old_paras[i]["text"])
+            deletions.append(old_paras[i]["text"])
 
-    if deleted_whole:
-        # Add a single comment on page 1 listing all fully deleted paragraphs
-        for del_text in deleted_whole:
-            _add_deletion_comment(doc, "", f"[DELETED] {del_text}", page_comment_y)
-
-    # Save annotated PDF to temp, then merge with summary page
+    # Save annotated PDF, generate summary+deletions page, merge
     annotated_bytes = doc.tobytes()
     doc.close()
 
-    # Generate summary page and merge
     from doccompare.rendering.pdf_pipeline import _render_summary_pdf, _merge_pdfs
 
-    summary_bytes = _render_summary_pdf(summary, original_name, modified_name)
+    summary_bytes = _render_summary_pdf(
+        summary, original_name, modified_name, deletions=deletions,
+    )
 
-    # Write annotated PDF to temp file, then merge
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
         tmp.write(annotated_bytes)
@@ -683,35 +659,8 @@ def _annotate_pdf(
         tmp_path.unlink(missing_ok=True)
 
 
-def _highlight_text(doc, text: str, color: tuple):
-    """Search for text in the PDF and add a soft highlight annotation.
-
-    Used for entirely new paragraphs. Skips short strings to avoid
-    false-positive matches.
-    """
-    if not text or len(text.strip()) < 6:
-        return
-
-    search_text = text.strip()
-    if len(search_text) > 100:
-        search_text = search_text[:100]
-
-    for page in doc:
-        quads = page.search_for(search_text, quads=True)
-        if quads:
-            annot = page.add_highlight_annot(quads)
-            annot.set_colors(stroke=color)
-            annot.set_opacity(0.4)
-            annot.update()
-            break
-
-
 def _underline_text(doc, text: str, color: tuple):
-    """Search for text in the PDF and add a blue underline annotation.
-
-    Used for inline additions within changed paragraphs — cleaner than
-    a colored highlight. Skips short strings to avoid false positives.
-    """
+    """Search for text in the PDF and add a blue underline annotation."""
     if not text or len(text.strip()) < 6:
         return
 
@@ -727,55 +676,6 @@ def _underline_text(doc, text: str, color: tuple):
             annot.set_opacity(0.8)
             annot.update()
             break
-
-
-def _add_deletion_comment(
-    doc, near_text: str, deleted_text: str, page_comment_y: dict,
-):
-    """Add a text annotation (sticky note) for deleted text.
-
-    Places the comment icon in the RIGHT MARGIN so it doesn't overlap content.
-    """
-    import fitz
-
-    # Try to find the location of nearby text to position comment on same line
-    target_page = 0
-    target_y = None
-
-    if near_text:
-        search = near_text[:50] if len(near_text) > 50 else near_text
-        for page_num, page in enumerate(doc):
-            rects = page.search_for(search)
-            if rects:
-                target_page = page_num
-                target_y = rects[0].y0
-                break
-
-    page = doc[target_page]
-
-    if target_y is None:
-        # Stack vertically in the right margin
-        target_y = page_comment_y.get(target_page, 40)
-
-    # Place icon in the right margin (outside main text area)
-    margin_x = page.rect.width - 20
-    target_point = fitz.Point(margin_x, target_y)
-
-    # Track Y position so next comment on same page doesn't overlap
-    page_comment_y[target_page] = target_y + 25
-
-    # Truncate very long deletion text
-    if len(deleted_text) > 500:
-        deleted_text = deleted_text[:500] + "..."
-
-    annot = page.add_text_annot(
-        target_point,
-        f"Deleted: {deleted_text}",
-        icon="Note",
-    )
-    annot.set_colors(stroke=(0.8, 0.1, 0.1))  # Dark red
-    annot.set_opacity(0.8)
-    annot.update()
 
 
 # ── Public API ───────────────────────────────────────────────────────────
