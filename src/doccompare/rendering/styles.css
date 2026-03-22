@@ -66,11 +66,11 @@ body {
 }
 
 .stat-added {
-    color: #0047ab;
+    color: #2e97d3;
 }
 
 .stat-deleted {
-    color: #c0392b;
+    color: #b5082e;
 }
 
 .stat-moved {
@@ -105,13 +105,13 @@ li {
 }
 
 li.element-added {
-    border-left: 3pt solid #0047ab;
+    border-left: 3pt solid #2e97d3;
     padding-left: 8pt;
     margin-left: -11pt;
 }
 
 li.element-deleted {
-    border-left: 3pt solid #c0392b;
+    border-left: 3pt solid #b5082e;
     padding-left: 8pt;
     margin-left: -11pt;
 }
@@ -120,18 +120,18 @@ li.element-deleted {
    DIFF ANNOTATIONS
    ========================================================= */
 
-/* Added text: blue + underline */
+/* Added text: blue + underline (matches Word track-changes) */
 span.added {
-    color: #0047ab;
+    color: #2e97d3;
     text-decoration: underline;
-    text-decoration-color: #0047ab;
+    text-decoration-color: #2e97d3;
 }
 
-/* Deleted text: red + strikethrough */
+/* Deleted text: red + strikethrough (matches Word track-changes) */
 span.deleted {
-    color: #c0392b;
+    color: #b5082e;
     text-decoration: line-through;
-    text-decoration-color: #c0392b;
+    text-decoration-color: #b5082e;
 }
 
 /* Moved text — destination (new location): green + underline */
@@ -150,13 +150,13 @@ span.moved-from {
 
 /* Whole-element border for heavily changed paragraphs (no background) */
 p.element-added {
-    border-left: 3pt solid #0047ab;
+    border-left: 3pt solid #2e97d3;
     padding-left: 8pt;
     margin-left: -11pt;
 }
 
 p.element-deleted {
-    border-left: 3pt solid #c0392b;
+    border-left: 3pt solid #b5082e;
     padding-left: 8pt;
     margin-left: -11pt;
 }
@@ -191,11 +191,11 @@ th {
 }
 
 tr.element-added {
-    border-left: 3pt solid #0047ab;
+    border-left: 3pt solid #2e97d3;
 }
 
 tr.element-deleted {
-    border-left: 3pt solid #c0392b;
+    border-left: 3pt solid #b5082e;
 }
 
 /* Print-specific overrides */

@@ -487,8 +487,8 @@ def _render_diff_html(
     margin-bottom: 4pt;
     font-size: 11pt;
 }}
-.summary-stats .stat-added {{ color: #0047ab; }}
-.summary-stats .stat-deleted {{ color: #c0392b; }}
+.summary-stats .stat-added {{ color: #2e97d3; }}
+.summary-stats .stat-deleted {{ color: #b5082e; }}
 .summary-legend h3 {{
     font-size: 13pt;
     color: #2c3e50;
