@@ -1,13 +1,24 @@
-"""PDF pipeline: render OOXML Track-Changes tree directly to PDF.
+"""PDF pipeline: render OOXML Track-Changes .docx to PDF.
 
-No dependency on Microsoft Word — walks the modified XML tree and produces
-HTML with inline styles, then renders via WeasyPrint.
+Primary path (Word available):
+  1. Write track-changes .docx to temp file
+  2. Use Microsoft Word headless (AppleScript) to export as PDF
+  3. Generate summary/legend page via WeasyPrint
+  4. Merge with pypdf
+  5. Clean up temp files
+
+Fallback path (no Word):
+  Walk the XML tree, produce HTML with inline styles, render via WeasyPrint.
 
 Style and numbering resolution reads word/styles.xml and word/numbering.xml
 from the source DOCX to faithfully reproduce inherited formatting.
 """
 
 import html as html_mod
+import os
+import subprocess
+import tempfile
+import time
 import zipfile
 from copy import deepcopy
 from datetime import datetime
@@ -786,6 +797,180 @@ def render_tracked_changes_html(
 </html>"""
 
 
+def _word_to_pdf_headless(docx_path: Path, pdf_path: Path) -> bool:
+    """Convert .docx to PDF using Microsoft Word via AppleScript (headless).
+
+    Returns True on success, False if Word is unavailable.
+    """
+    docx_abs = str(docx_path.resolve())
+    pdf_abs = str(pdf_path.resolve())
+
+    # AppleScript: launch Word hidden, open doc, save as PDF, close, restore state.
+    # Uses System Events to keep Word invisible throughout.
+    script = f'''
+    -- Hide Word immediately if it launches
+    tell application "System Events"
+        set wordWasRunning to (name of every process) contains "Microsoft Word"
+    end tell
+
+    tell application "Microsoft Word"
+        open POSIX file "{docx_abs}" as alias
+    end tell
+
+    -- Immediately hide Word so it never appears on screen
+    tell application "System Events"
+        try
+            set visible of process "Microsoft Word" to false
+        end try
+    end tell
+
+    -- Small delay for the document to load
+    delay 1
+
+    tell application "Microsoft Word"
+        set theDoc to active document
+        set outputPath to POSIX file "{pdf_abs}" as text
+        save as theDoc file name outputPath file format format PDF
+        close theDoc saving no
+    end tell
+
+    -- If Word was not running before, quit it
+    if not wordWasRunning then
+        tell application "Microsoft Word" to quit
+    end if
+    '''
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=60,
+        )
+        return result.returncode == 0 and pdf_path.exists()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _render_summary_pdf(summary: dict, original_name: str, modified_name: str) -> bytes:
+    """Render summary/legend page as a standalone PDF via WeasyPrint."""
+    from doccompare.rendering.pdf_renderer import render_pdf
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    added = summary.get("added_words", 0)
+    deleted = summary.get("deleted_words", 0)
+    unchanged = summary.get("unchanged_words", 0)
+
+    css_path = Path(__file__).parent / "styles.css"
+    css = css_path.read_text(encoding="utf-8")
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<style>
+{css}
+.summary-page {{
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}}
+.summary-title {{
+    font-size: 18pt;
+    font-weight: 700;
+    color: #2c3e50;
+    margin-bottom: 8pt;
+}}
+.summary-meta {{
+    font-size: 9pt;
+    color: #555;
+    border-top: 1px solid #bdc3c7;
+    padding-top: 8pt;
+    margin-bottom: 16pt;
+}}
+.summary-stats {{
+    margin-bottom: 20pt;
+}}
+.summary-stats .stat {{
+    display: block;
+    margin-bottom: 4pt;
+    font-size: 11pt;
+}}
+.summary-stats .stat-added {{ color: #0047ab; }}
+.summary-stats .stat-deleted {{ color: #c0392b; }}
+.summary-legend h3 {{
+    font-size: 13pt;
+    color: #2c3e50;
+    margin-bottom: 8pt;
+}}
+.summary-legend p {{
+    font-size: 10pt;
+    margin-bottom: 6pt;
+}}
+.summary-footer {{
+    margin-top: 24pt;
+    padding-top: 8pt;
+    border-top: 1px solid #bdc3c7;
+    font-size: 8pt;
+    color: #888;
+}}
+</style>
+</head>
+<body>
+    <div class="summary-page">
+        <h2 class="summary-title">DocCompare &mdash; Sammanfattning</h2>
+        <div class="summary-meta">
+            <strong>Original:</strong> {html_mod.escape(original_name)} &nbsp;|&nbsp;
+            <strong>Modifierat:</strong> {html_mod.escape(modified_name)} &nbsp;|&nbsp;
+            <strong>Datum:</strong> {now}
+        </div>
+        <div class="summary-stats">
+            <div class="stat stat-added">+{added} ord tillagda</div>
+            <div class="stat stat-deleted">&minus;{deleted} ord borttagna</div>
+            <div class="stat">{unchanged} ord of&ouml;r&auml;ndrade</div>
+        </div>
+        <div class="summary-legend">
+            <h3>Legend</h3>
+            <p><span style="color:#0047ab;text-decoration:underline">Tillagd text</span> &mdash;
+               text som finns i det modifierade dokumentet men inte i originalet.</p>
+            <p><span style="color:#c0392b;text-decoration:line-through">Borttagen text</span> &mdash;
+               text som finns i originalet men inte i det modifierade dokumentet.</p>
+            <p>Of&ouml;r&auml;ndrad text &mdash;
+               text som &auml;r identisk i b&aring;da dokumenten.</p>
+        </div>
+        <div class="summary-footer">
+            Genererad av DocCompare &mdash; Liljedahl Advisory AB
+        </div>
+    </div>
+</body>
+</html>"""
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        render_pdf(html_content, css_path, tmp_path)
+        return tmp_path.read_bytes()
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _merge_pdfs(main_pdf: Path, summary_pdf_bytes: bytes, output_pdf: Path):
+    """Merge the main document PDF with the summary page PDF."""
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+
+    # Add all pages from the main document
+    reader = PdfReader(str(main_pdf))
+    for page in reader.pages:
+        writer.add_page(page)
+
+    # Add summary page(s)
+    import io
+    summary_reader = PdfReader(io.BytesIO(summary_pdf_bytes))
+    for page in summary_reader.pages:
+        writer.add_page(page)
+
+    with open(output_pdf, "wb") as f:
+        writer.write(f)
+
+
 def produce_pdf(
     doc_tree,
     output_pdf: Path,
@@ -794,7 +979,62 @@ def produce_pdf(
     modified_name: str,
     docx_path=None,
 ):
-    """Render tracked-changes XML tree to PDF via WeasyPrint."""
+    """Produce final PDF: Word headless export + summary/legend merge.
+
+    Falls back to WeasyPrint HTML rendering if Word is unavailable.
+    """
+    from doccompare.comparison.ooxml_engine import _write_docx
+
+    output_pdf = Path(output_pdf)
+
+    # Step 1: Write tracked-changes .docx to a temp file
+    with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp_docx:
+        tmp_docx_path = Path(tmp_docx.name)
+
+    try:
+        # Write the modified XML tree into a copy of the source docx
+        if docx_path:
+            _write_docx(Path(docx_path), tmp_docx_path, doc_tree)
+        else:
+            # No source docx — fall back to WeasyPrint
+            return _produce_pdf_weasyprint(
+                doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
+            )
+
+        # Step 2: Convert to PDF via Word (headless)
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_pdf:
+            tmp_pdf_path = Path(tmp_pdf.name)
+
+        try:
+            word_ok = _word_to_pdf_headless(tmp_docx_path, tmp_pdf_path)
+            if not word_ok:
+                # Fall back to WeasyPrint
+                return _produce_pdf_weasyprint(
+                    doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
+                )
+
+            # Step 3: Render summary/legend page
+            summary_bytes = _render_summary_pdf(summary, original_name, modified_name)
+
+            # Step 4: Merge
+            _merge_pdfs(tmp_pdf_path, summary_bytes, output_pdf)
+
+        finally:
+            tmp_pdf_path.unlink(missing_ok=True)
+
+    finally:
+        tmp_docx_path.unlink(missing_ok=True)
+
+
+def _produce_pdf_weasyprint(
+    doc_tree,
+    output_pdf: Path,
+    summary: dict,
+    original_name: str,
+    modified_name: str,
+    docx_path=None,
+):
+    """Fallback: render tracked-changes XML tree to PDF via WeasyPrint."""
     from doccompare.rendering.pdf_renderer import render_pdf
 
     html_content = render_tracked_changes_html(
