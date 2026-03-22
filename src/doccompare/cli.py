@@ -8,7 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
-SUPPORTED_FORMATS = {".docx", ".pdf"}
+SUPPORTED_FORMATS = {".docx"}
 
 
 @click.command()
@@ -29,18 +29,15 @@ SUPPORTED_FORMATS = {".docx", ".pdf"}
 )
 @click.version_option(package_name="doccompare")
 def compare(original: Path, modified: Path, output: Path, author: str, verbose: bool):
-    """Compare two documents and generate a PDF diff report.
+    """Compare two .docx documents and generate a PDF diff report.
 
     ORIGINAL is the older version, MODIFIED is the newer version.
-    Supports .docx and .pdf files. Both files must be the same format.
 
     Examples:
 
         doccompare original.docx modified.docx
 
-        doccompare v1.pdf v2.pdf -o diff.pdf
-
-        doccompare draft.docx final.docx --author "Jane Doe"
+        doccompare draft.docx final.docx -o diff.pdf --author "Jane Doe"
     """
     if not verbose:
         logger.remove()
@@ -73,10 +70,7 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
     with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=console) as progress:
         task = progress.add_task("Comparing documents\u2026", total=None)
         try:
-            if orig_ext == ".docx":
-                summary = _compare_docx(original, modified, output, author, progress, task)
-            else:
-                summary = _compare_pdf(original, modified, output, progress, task)
+            summary = _compare_docx(original, modified, output, author, progress, task)
         except Exception as e:
             click.echo(f"Error: {e}", err=True)
             sys.exit(1)
@@ -106,14 +100,3 @@ def _compare_docx(original, modified, output, author, progress, task):
     return summary
 
 
-def _compare_pdf(original, modified, output, progress, task):
-    """PDF comparison via text extraction + diff_match_patch."""
-    from doccompare.comparison.pdf_engine import compare_pdfs
-
-    progress.update(task, description="Comparing PDFs\u2026")
-    summary = compare_pdfs(
-        original, modified, output,
-        original_name=original.name,
-        modified_name=modified.name,
-    )
-    return summary

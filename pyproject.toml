@@ -5,14 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "doccompare"
 version = "0.1.0"
-description = "CLI tool to compare .docx and .pdf documents and generate a color-coded PDF diff report"
+description = "CLI tool to compare .docx documents and generate a color-coded PDF diff report"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "python-docx>=1.1",
-    "pdfplumber>=0.11",
-    "PyMuPDF>=1.24",
-    "pdf2docx>=0.5.8",
     "diff-match-patch>=20230430",
     "rapidfuzz>=3.0",
     "WeasyPrint>=62",
