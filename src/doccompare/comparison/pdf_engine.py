@@ -611,11 +611,8 @@ def _annotate_pdf(
     matched_old = {i for i, _ in matches}
     matched_new = {j for _, j in matches}
 
-    # Colors
-    BLUE = fitz.pdfcolor["blue"]
-    RED = fitz.pdfcolor["red"]
-    LIGHT_BLUE = (0.85, 0.92, 1.0)   # Light blue highlight
-    LIGHT_RED = (1.0, 0.88, 0.88)    # Light red highlight
+    # Highlight color — blue for additions
+    BLUE = (0.0, 0.28, 0.67)  # #0047ab — matches the CSS .added color
 
     # Track annotations added per page for comment positioning
     page_comment_y: dict[int, float] = {}
@@ -640,7 +637,7 @@ def _annotate_pdf(
         # Highlight added text in the PDF (search in new PDF)
         for added_text in added_parts:
             # Search for the text across all pages
-            _highlight_text(doc, added_text, LIGHT_BLUE, BLUE)
+            _highlight_text(doc, added_text, BLUE)
 
         # Add deleted text as margin comments
         if deleted_parts:
@@ -653,7 +650,7 @@ def _annotate_pdf(
     for j in range(len(new_paras)):
         if j not in matched_new:
             text = new_paras[j]["text"]
-            _highlight_text(doc, text, LIGHT_BLUE, BLUE)
+            _highlight_text(doc, text, BLUE)
 
     # Mark entirely deleted paragraphs (unmatched in old)
     deleted_whole = []
@@ -687,24 +684,31 @@ def _annotate_pdf(
         tmp_path.unlink(missing_ok=True)
 
 
-def _highlight_text(doc, text: str, bg_color: tuple, border_color: tuple):
-    """Search for text in the PDF and add highlight annotations."""
+def _highlight_text(doc, text: str, color: tuple):
+    """Search for text in the PDF and add highlight annotations.
+
+    Skips very short strings (<6 chars) to avoid false-positive matches
+    on common substrings like "(c)", "1.1", etc.
+    """
     import fitz
 
-    if not text or len(text) < 2:
+    # Skip very short strings — they match everywhere and create false positives
+    if not text or len(text.strip()) < 6:
         return
 
     # Search for the text (or a reasonable chunk of it)
-    # For long texts, search for the first ~80 chars to find the location
-    search_text = text[:80] if len(text) > 80 else text
+    # Use a middle section for better uniqueness (avoid leading numbering)
+    search_text = text.strip()
+    if len(search_text) > 100:
+        search_text = search_text[:100]
 
     for page in doc:
         rects = page.search_for(search_text, quads=True)
         if rects:
             for quad in rects:
                 annot = page.add_highlight_annot(quad)
-                annot.set_colors(stroke=border_color)
-                annot.set_opacity(0.3)
+                annot.set_colors(stroke=color)
+                annot.set_opacity(0.35)
                 annot.update()
             break  # Found on this page, no need to check others
 
@@ -712,12 +716,15 @@ def _highlight_text(doc, text: str, bg_color: tuple, border_color: tuple):
 def _add_deletion_comment(
     doc, near_text: str, deleted_text: str, page_comment_y: dict,
 ):
-    """Add a text annotation (comment) for deleted text near where it was."""
+    """Add a text annotation (sticky note) for deleted text.
+
+    Places the comment icon in the RIGHT MARGIN so it doesn't overlap content.
+    """
     import fitz
 
-    # Try to find the location of nearby text
+    # Try to find the location of nearby text to position comment on same line
     target_page = 0
-    target_point = None
+    target_y = None
 
     if near_text:
         search = near_text[:50] if len(near_text) > 50 else near_text
@@ -725,28 +732,33 @@ def _add_deletion_comment(
             rects = page.search_for(search)
             if rects:
                 target_page = page_num
-                rect = rects[0]
-                target_point = fitz.Point(rect.x1 + 5, rect.y0)
+                target_y = rects[0].y0
                 break
 
     page = doc[target_page]
 
-    if target_point is None:
-        # Place at right margin, stacked vertically
-        y = page_comment_y.get(target_page, 50)
-        target_point = fitz.Point(page.rect.width - 30, y)
-        page_comment_y[target_page] = y + 20
+    if target_y is None:
+        # Stack vertically in the right margin
+        target_y = page_comment_y.get(target_page, 40)
 
-    # Truncate very long deletion text for the comment
-    if len(deleted_text) > 300:
-        deleted_text = deleted_text[:300] + "..."
+    # Place icon in the right margin (outside main text area)
+    margin_x = page.rect.width - 20
+    target_point = fitz.Point(margin_x, target_y)
+
+    # Track Y position so next comment on same page doesn't overlap
+    page_comment_y[target_page] = target_y + 25
+
+    # Truncate very long deletion text
+    if len(deleted_text) > 500:
+        deleted_text = deleted_text[:500] + "..."
 
     annot = page.add_text_annot(
         target_point,
         f"Deleted: {deleted_text}",
-        icon="Comment",
+        icon="Note",
     )
-    annot.set_colors(stroke=(1, 0, 0))  # Red
+    annot.set_colors(stroke=(0.8, 0.1, 0.1))  # Dark red
+    annot.set_opacity(0.8)
     annot.update()
 
 
