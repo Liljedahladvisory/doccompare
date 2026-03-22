@@ -125,6 +125,11 @@ class DocCompareApp:
             tk.Label(logo_frame, text="Liljedahl", font=(FONT, 15), bg=BG, fg="#707080").pack(side="left")
             tk.Label(logo_frame, text=" Advisory", font=(FONT, 15, "bold"), bg=BG, fg="#50505e").pack(side="left")
 
+        tk.Label(
+            header, text="Liljedahl Legal Tech Tools",
+            font=(FONT, 10), bg=BG, fg=SUBTITLE, anchor="w",
+        ).pack(anchor="w", padx=(15, 0), pady=(2, 0))
+
         # ── Title block ──────────────────────────────────────────────────
         title_frame = tk.Frame(outer, bg=BG)
         title_frame.pack(fill="x", pady=(0, 6))
