@@ -20,6 +20,8 @@ import subprocess
 import tempfile
 import time
 import zipfile
+
+from loguru import logger
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -797,12 +799,13 @@ def render_tracked_changes_html(
 </html>"""
 
 
-def _ensure_cache_dir() -> Path:
-    """Return ~/Library/Caches/DocCompare/, creating it if needed.
+def _word_temp_dir() -> Path:
+    """Return a temp directory inside Word's own sandbox container.
 
-    Word has full access to ~/Library/ (no sandbox permission dialogs).
+    ~/Library/Group Containers/UBF8T346G9.Office/ is Word's sandbox —
+    it has GUARANTEED read/write access with zero permission dialogs.
     """
-    d = Path.home() / "Library" / "Caches" / "DocCompare"
+    d = Path.home() / "Library" / "Group Containers" / "UBF8T346G9.Office" / "DocCompare"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -837,8 +840,18 @@ def _word_to_pdf_headless(docx_path: Path, pdf_path: Path) -> bool:
             ["osascript", "-e", script],
             capture_output=True, text=True, timeout=60,
         )
-        return result.returncode == 0 and pdf_path.exists()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        if result.returncode != 0:
+            logger.warning(f"Word AppleScript failed (rc={result.returncode}): {result.stderr.strip()}")
+            return False
+        if not pdf_path.exists():
+            logger.warning("Word AppleScript succeeded but PDF file not found")
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning("Word AppleScript timed out after 60s")
+        return False
+    except FileNotFoundError:
+        logger.warning("osascript not found — not on macOS?")
         return False
 
 
@@ -979,29 +992,32 @@ def produce_pdf(
 
     output_pdf = Path(output_pdf)
 
-    # Temp files go in the SAME directory as the output PDF.
-    # Word already has access to wherever the user chose to save
-    # (typically Desktop), so no sandbox permission dialogs.
-    out_dir = output_pdf.resolve().parent
+    # Temp files go inside Word's own sandbox container so that
+    # Word can read/write them without triggering macOS permission dialogs.
+    word_dir = _word_temp_dir()
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    tmp_docx_path = out_dir / f".doccompare_tc_{ts}.docx"
-    tmp_pdf_path = out_dir / f".doccompare_tc_{ts}.pdf"
+    tmp_docx_path = word_dir / f".doccompare_tc_{ts}.docx"
+    tmp_pdf_path = word_dir / f".doccompare_tc_{ts}.pdf"
 
     try:
         # Step 1: Write tracked-changes .docx
         if docx_path:
             _write_docx(Path(docx_path), tmp_docx_path, doc_tree)
         else:
+            logger.warning("No docx_path provided — falling back to WeasyPrint")
             return _produce_pdf_weasyprint(
                 doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
             )
 
         # Step 2: Convert to PDF via Word (headless)
+        logger.info(f"Word headless: {tmp_docx_path} → {tmp_pdf_path}")
         word_ok = _word_to_pdf_headless(tmp_docx_path, tmp_pdf_path)
         if not word_ok:
+            logger.warning("Word headless conversion failed — falling back to WeasyPrint")
             return _produce_pdf_weasyprint(
                 doc_tree, output_pdf, summary, original_name, modified_name, docx_path,
             )
+        logger.info("Word headless conversion succeeded")
 
         # Step 3: Render summary/legend page
         summary_bytes = _render_summary_pdf(summary, original_name, modified_name)

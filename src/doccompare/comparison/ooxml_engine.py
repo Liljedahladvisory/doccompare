@@ -248,9 +248,26 @@ def _get_blocks(body: etree._Element) -> list:
     return blocks
 
 
+W_TAB = _qn("w:tab")
+W_BR = _qn("w:br")
+
+
 def _para_text(p: etree._Element) -> str:
-    """Get plain text of a paragraph (all w:t descendants)."""
-    return "".join(t.text or "" for t in p.iter(W_T))
+    """Get plain text of a paragraph, including \\t for w:tab and \\n for w:br."""
+    parts = []
+    for r in p.iter(W_R):
+        for child in r:
+            if child.tag == W_T:
+                parts.append(child.text or "")
+            elif child.tag == W_TAB:
+                parts.append("\t")
+            elif child.tag == W_BR:
+                br_type = child.get(f"{{{W_NS}}}type", "")
+                if br_type == "page":
+                    parts.append("\f")  # form-feed for page break
+                else:
+                    parts.append("\n")
+    return "".join(parts)
 
 
 def _block_text(b: etree._Element) -> str:
@@ -317,16 +334,25 @@ def _collect_runs(para: etree._Element) -> list:
 
 
 def _run_intervals(para: etree._Element) -> list:
-    """Return [(start, end, rPr_element)] for each run's text."""
+    """Return [(start, end, rPr_element)] for each run's text content.
+
+    Includes \\t (tab) and \\n/\\f (breaks) as single characters.
+    """
     intervals = []
     pos = 0
     for r in _collect_runs(para):
-        t = r.find(W_T)
-        text = (t.text or "") if t is not None else ""
         rpr = r.find(W_RPR)
-        if text:
-            intervals.append((pos, pos + len(text), rpr))
-            pos += len(text)
+        run_len = 0
+        for child in r:
+            if child.tag == W_T:
+                run_len += len(child.text or "")
+            elif child.tag == W_TAB:
+                run_len += 1  # \t
+            elif child.tag == W_BR:
+                run_len += 1  # \n or \f
+        if run_len > 0:
+            intervals.append((pos, pos + run_len, rpr))
+            pos += run_len
     return intervals
 
 
@@ -361,7 +387,36 @@ def _split_by_runs(text: str, start: int, intervals: list):
 
 
 # ── XML element construction ───────────────────────────────────────────
-def _make_run(text: str, rpr) -> etree._Element:
+def _make_runs(text: str, rpr) -> list:
+    """Create w:r elements from text, preserving \\t as w:tab and \\n/\\f as w:br."""
+    elements = []
+    buf = []
+    for ch in text:
+        if ch in ("\t", "\n", "\f"):
+            # Flush buffered text
+            if buf:
+                elements.append(_make_text_run("".join(buf), rpr))
+                buf.clear()
+            # Create structural element
+            r = etree.Element(W_R)
+            if rpr is not None:
+                r.append(copy.deepcopy(rpr))
+            if ch == "\t":
+                etree.SubElement(r, W_TAB)
+            elif ch == "\f":
+                br = etree.SubElement(r, W_BR)
+                br.set(f"{{{W_NS}}}type", "page")
+            else:  # \n
+                etree.SubElement(r, W_BR)
+            elements.append(r)
+        else:
+            buf.append(ch)
+    if buf:
+        elements.append(_make_text_run("".join(buf), rpr))
+    return elements
+
+
+def _make_text_run(text: str, rpr) -> etree._Element:
     """Create a <w:r> with optional rPr and <w:t>."""
     r = etree.Element(W_R)
     if rpr is not None:
@@ -373,7 +428,34 @@ def _make_run(text: str, rpr) -> etree._Element:
     return r
 
 
-def _make_del_run(text: str, rpr) -> etree._Element:
+def _make_del_runs(text: str, rpr) -> list:
+    """Create deleted w:r elements, preserving \\t as w:tab and \\n/\\f as w:br."""
+    elements = []
+    buf = []
+    for ch in text:
+        if ch in ("\t", "\n", "\f"):
+            if buf:
+                elements.append(_make_del_text_run("".join(buf), rpr))
+                buf.clear()
+            r = etree.Element(W_R)
+            if rpr is not None:
+                r.append(copy.deepcopy(rpr))
+            if ch == "\t":
+                etree.SubElement(r, W_TAB)
+            elif ch == "\f":
+                br = etree.SubElement(r, W_BR)
+                br.set(f"{{{W_NS}}}type", "page")
+            else:
+                etree.SubElement(r, W_BR)
+            elements.append(r)
+        else:
+            buf.append(ch)
+    if buf:
+        elements.append(_make_del_text_run("".join(buf), rpr))
+    return elements
+
+
+def _make_del_text_run(text: str, rpr) -> etree._Element:
     """Create a <w:r> with <w:delText> for deleted content."""
     r = etree.Element(W_R)
     if rpr is not None:
@@ -418,19 +500,21 @@ def _diff_para(
             continue
         if op == 0:  # EQUAL — use new document's formatting
             for chunk, rpr in _split_by_runs(text, new_pos, new_iv):
-                children.append(_make_run(chunk, rpr))
+                children.extend(_make_runs(chunk, rpr))
             old_pos += len(text)
             new_pos += len(text)
         elif op == -1:  # DELETE — use old document's formatting
             d = etree.Element(W_DEL, _rev_attrs(rid, author, date))
             for chunk, rpr in _split_by_runs(text, old_pos, old_iv):
-                d.append(_make_del_run(chunk, rpr))
+                for run in _make_del_runs(chunk, rpr):
+                    d.append(run)
             children.append(d)
             old_pos += len(text)
         elif op == 1:  # INSERT — use new document's formatting
             ins = etree.Element(W_INS, _rev_attrs(rid, author, date))
             for chunk, rpr in _split_by_runs(text, new_pos, new_iv):
-                ins.append(_make_run(chunk, rpr))
+                for run in _make_runs(chunk, rpr):
+                    ins.append(run)
             children.append(ins)
             new_pos += len(text)
 
