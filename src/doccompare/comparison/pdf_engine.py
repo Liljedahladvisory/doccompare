@@ -683,16 +683,9 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
         if not has_changes:
             continue
 
-        # Skip paragraphs where only the numbering changed
-        if _only_numbering_changed(segments):
-            continue
-
         page_hint = new_paras[nj].get("page_num", 0)
 
         for seg_type, seg_text in segments:
-            if _is_numbering_only(seg_text):
-                continue
-
             if seg_type == "added" and seg_text.strip():
                 # REDACT + REWRITE in blue with underline
                 _recolor_on_pages(doc, seg_text, _BLUE, font_map,
