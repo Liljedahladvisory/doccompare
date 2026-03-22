@@ -17,15 +17,29 @@ Architecture:
 import html as html_mod
 import re
 import tempfile
+import zipfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 import diff_match_patch as dmp_module
+from lxml import etree
 from loguru import logger
 from rapidfuzz import fuzz
 
 from doccompare.parsers.pdf_parser import PdfParser
+
+# ── OOXML constants for cleanup ──────────────────────────────────────────
+_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_W_P = f"{{{_W}}}p"
+_W_R = f"{{{_W}}}r"
+_W_T = f"{{{_W}}}t"
+_W_TAB = f"{{{_W}}}tab"
+_W_PPR = f"{{{_W}}}pPr"
+_W_TABS = f"{{{_W}}}tabs"
+_W_IND = f"{{{_W}}}ind"
+_W_BODY = f"{{{_W}}}body"
+_XML_NS = "http://www.w3.org/XML/1998/namespace"
 
 # ── Regex patterns ───────────────────────────────────────────────────────
 
@@ -612,6 +626,78 @@ def compare_pdfs(
     )
 
 
+def _cleanup_converted_docx(docx_path: Path) -> None:
+    """Clean up a Word-converted PDF→DOCX to fix formatting artifacts.
+
+    Word's PDF-to-DOCX converter often creates:
+    - Center-aligned tab stops that produce huge gaps (e.g., "1.2 [TAB] text")
+    - Inconsistent indentation across similar paragraphs
+
+    This function:
+    1. Replaces center/right tab stops with left-aligned ones
+    2. Replaces w:tab elements in runs with a space when the tab stop is
+       center/right (these create the oversized gaps)
+    3. Normalizes the DOCX in-place
+    """
+    import shutil
+
+    tmp_path = docx_path.with_suffix(".docx.tmp")
+
+    W = _W
+
+    with zipfile.ZipFile(docx_path, "r") as zin:
+        doc_xml = etree.fromstring(zin.read("word/document.xml"))
+
+        body = doc_xml.find(_W_BODY)
+        fixed_tabs = 0
+
+        for p in body.iter(_W_P):
+            ppr = p.find(_W_PPR)
+            if ppr is None:
+                continue
+
+            tabs_el = ppr.find(_W_TABS)
+            has_center_tab = False
+
+            if tabs_el is not None:
+                for tab in list(tabs_el):
+                    val = tab.get(f"{{{W}}}val", "")
+                    if val in ("center", "right"):
+                        has_center_tab = True
+                        # Change to left-aligned tab at same position
+                        tab.set(f"{{{W}}}val", "left")
+
+            if has_center_tab:
+                # Replace w:tab elements with a space in runs
+                for r in p.iter(_W_R):
+                    for child in list(r):
+                        if child.tag == _W_TAB:
+                            # Replace tab with a space character
+                            r.remove(child)
+                            t = etree.SubElement(r, _W_T)
+                            t.text = " "
+                            t.set(f"{{{_XML_NS}}}space", "preserve")
+                            fixed_tabs += 1
+
+        if fixed_tabs:
+            logger.debug(f"Fixed {fixed_tabs} center/right tab stops in converted DOCX")
+
+        # Write modified document.xml back
+        xml_bytes = etree.tostring(
+            doc_xml, xml_declaration=True, encoding="UTF-8", standalone=True,
+        )
+
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename == "word/document.xml":
+                    zout.writestr(item, xml_bytes)
+                else:
+                    zout.writestr(item, zin.read(item.filename))
+
+    # Replace original with cleaned version
+    shutil.move(str(tmp_path), str(docx_path))
+
+
 def _compare_pdfs_via_word(
     old_path: Path,
     new_path: Path,
@@ -643,7 +729,12 @@ def _compare_pdfs_via_word(
         if not _pdf_to_docx_headless(new_path, new_docx):
             return None
 
-        # Step 2: Run OOXML comparison (same engine as .docx files)
+        # Step 2: Clean up converted DOCX (fix center tabs, etc.)
+        logger.info("Cleaning up converted documents")
+        _cleanup_converted_docx(old_docx)
+        _cleanup_converted_docx(new_docx)
+
+        # Step 3: Run OOXML comparison (same engine as .docx files)
         logger.info("Running OOXML comparison on converted documents")
         doc_tree, summary = ooxml_compare(old_docx, new_docx, None)
 
