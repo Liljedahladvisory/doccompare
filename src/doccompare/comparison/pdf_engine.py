@@ -398,9 +398,11 @@ def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
 
 # -- PDF-native diff rendering ------------------------------------------------
 #
-# Strategy: clone the new PDF, mark additions with blue underline,
-# insert deleted text with red strikethrough.
-# Original formatting is 100% preserved.
+# Strategy: clone the new PDF, then for each changed text span:
+#   1. REDACT the original black text (removes it from the page)
+#   2. REWRITE the same text at the exact same position in blue/red
+#      using the original embedded font
+# This actually changes the text color — not just an annotation overlay.
 
 _BLUE = (0.18, 0.59, 0.83)    # #2e97d3 -- additions (matches Word)
 _RED = (0.71, 0.03, 0.18)     # #b5082e -- deletions (matches Word)
@@ -446,46 +448,152 @@ def _get_font(font_map: dict, font_name: str):
         return None
 
 
-def _mark_text(doc, text: str, color: tuple, underline=False,
-               strikethrough=False, start_page=0):
-    """Search for text in the PDF and add colored annotation."""
+def _is_numbering_only(text: str) -> bool:
+    """Check if text is only a section number like '1.12 ' or '(a) '."""
+    return bool(_RE_LEADING_NUM.fullmatch(text)) or bool(
+        re.fullmatch(r"\d+(?:\.\d+)*\.?\s*", text)
+    )
+
+
+def _only_numbering_changed(segments: list[tuple[str, str]]) -> bool:
+    """Check if the only changes in a paragraph are numbering changes."""
+    for seg_type, seg_text in segments:
+        if seg_type in ("added", "deleted"):
+            if not _is_numbering_only(seg_text):
+                return False
+    return True
+
+
+def _recolor_text_on_page(page, search_text: str, color: tuple,
+                          font_map: dict, underline: bool = False,
+                          strikethrough: bool = False):
+    """Find text on a page, redact it, rewrite in new color.
+
+    This ACTUALLY changes the text color, not just an annotation.
+    Steps:
+      1. search_for() to find the rect
+      2. get_text("dict", clip=rect) to get span details (font, size, origin)
+      3. add_redact_annot() on each span to remove original text
+      4. apply_redactions() to clear old text
+      5. TextWriter to rewrite each span at exact same position in new color
+      6. Optionally add underline/strikethrough annotation
+    """
     import fitz
 
+    if not search_text or len(search_text.strip()) < 2:
+        return False
+
+    search = search_text.strip()
+    if len(search) > 200:
+        search = search[:200]
+
+    rects = page.search_for(search)
+    if not rects:
+        return False
+
+    # Get all the spans that fall within the found rects
+    spans_to_rewrite = []
+    for rect in rects:
+        # Expand clip slightly to catch full spans
+        clip = fitz.Rect(rect.x0 - 1, rect.y0 - 1, rect.x1 + 1, rect.y1 + 1)
+        td = page.get_text("dict", clip=clip)
+        for block in td.get("blocks", []):
+            if "lines" not in block:
+                continue
+            for line in block["lines"]:
+                for span in line["spans"]:
+                    span_rect = fitz.Rect(span["bbox"])
+                    if span_rect.intersects(rect) and span["text"].strip():
+                        spans_to_rewrite.append({
+                            "text": span["text"],
+                            "font": span["font"],
+                            "size": span["size"],
+                            "origin": span.get("origin", (span["bbox"][0], span["bbox"][3])),
+                            "bbox": span["bbox"],
+                        })
+
+    if not spans_to_rewrite:
+        return False
+
+    # Step 1: Add redaction annotations for all spans
+    for sp in spans_to_rewrite:
+        r = fitz.Rect(sp["bbox"])
+        page.add_redact_annot(r, text="")
+
+    # Step 2: Apply all redactions (removes original text)
+    page.apply_redactions()
+
+    # Step 3: Rewrite each span in the new color using TextWriter
+    for sp in spans_to_rewrite:
+        font = _get_font(font_map, sp["font"])
+        if not font:
+            continue
+
+        tw = fitz.TextWriter(page.rect)
+        origin = fitz.Point(sp["origin"][0], sp["origin"][1])
+        try:
+            tw.append(origin, sp["text"], font=font, fontsize=sp["size"])
+            tw.write_text(page, color=color)
+        except Exception as e:
+            logger.debug(f"Could not rewrite span: {e}")
+
+    # Step 4: Add underline/strikethrough annotation
+    for rect in rects:
+        if underline:
+            try:
+                annot = page.add_underline_annot(rect)
+                annot.set_colors(stroke=list(color))
+                annot.update()
+            except Exception:
+                pass
+        if strikethrough:
+            try:
+                annot = page.add_strikeout_annot(rect)
+                annot.set_colors(stroke=list(color))
+                annot.update()
+            except Exception:
+                pass
+
+    return True
+
+
+def _recolor_on_pages(doc, text: str, color: tuple, font_map: dict,
+                      underline: bool = False, strikethrough: bool = False,
+                      start_page: int = 0):
+    """Search for text across pages and recolor it."""
     if not text or len(text.strip()) < 2:
         return
 
     search = text.strip()
-    # For very long text, split into chunks
+
+    # For very long text, split into manageable chunks
     if len(search) > 120:
-        _mark_text(doc, search[:80], color, underline, strikethrough, start_page)
-        _mark_text(doc, search[80:], color, underline, strikethrough, start_page)
+        _recolor_on_pages(doc, search[:80], color, font_map,
+                          underline, strikethrough, start_page)
+        _recolor_on_pages(doc, search[80:], color, font_map,
+                          underline, strikethrough, start_page)
         return
 
-    # Try nearby pages first, then all pages
-    page_ranges = [
-        range(start_page, min(start_page + 3, len(doc))),
-        range(len(doc)),
-    ]
+    # Try nearby pages first
+    for pi in range(start_page, min(start_page + 3, len(doc))):
+        if _recolor_text_on_page(doc[pi], search, color, font_map,
+                                  underline, strikethrough):
+            return
 
-    for page_range in page_ranges:
-        for pi in page_range:
-            page = doc[pi]
-            quads = page.search_for(search, quads=True)
-            if quads:
-                if underline:
-                    annot = page.add_underline_annot(quads)
-                    annot.set_colors(stroke=list(color))
-                    annot.update()
-                if strikethrough:
-                    annot = page.add_strikeout_annot(quads)
-                    annot.set_colors(stroke=list(color))
-                    annot.update()
-                return
+    # Fallback: try all pages
+    for pi in range(len(doc)):
+        if _recolor_text_on_page(doc[pi], search, color, font_map,
+                                  underline, strikethrough):
+            return
 
 
 def _insert_deleted_text(doc, deleted_text: str, page_num: int,
                          segments: list, font_map: dict):
-    """Insert deleted text as a FreeText annotation near the paragraph."""
+    """Insert deleted text on the page in red with strikethrough.
+
+    Uses TextWriter to place red text near the context, then adds
+    a strikethrough annotation over it.
+    """
     import fitz
 
     if not deleted_text.strip() or len(deleted_text.strip()) < 2:
@@ -506,9 +614,9 @@ def _insert_deleted_text(doc, deleted_text: str, page_num: int,
     if not anchor_rect:
         return
 
-    # Get font info from anchor area
+    # Get font info from the anchor area
     fontsize = 10.1
-    font = None
+    font_name = "ArialMT"
     td = page.get_text("dict", clip=anchor_rect)
     for block in td.get("blocks", []):
         if "lines" not in block:
@@ -516,73 +624,50 @@ def _insert_deleted_text(doc, deleted_text: str, page_num: int,
         for line in block["lines"]:
             for span in line["spans"]:
                 fontsize = span["size"]
-                font = _get_font(font_map, span["font"])
+                font_name = span["font"]
                 break
-            if font:
-                break
-        if font:
-            break
 
-    if not font:
-        font = _get_font(font_map, "ArialMT")
+    font = _get_font(font_map, font_name)
     if not font:
         return
 
     text_to_insert = deleted_text.strip()
-    if len(text_to_insert) > 150:
-        text_to_insert = text_to_insert[:150] + "..."
+    if len(text_to_insert) > 200:
+        text_to_insert = text_to_insert[:200] + "..."
 
-    # Calculate width needed
+    # Write the deleted text in red above the anchor line
     text_length = font.text_length(text_to_insert, fontsize=fontsize)
+    y_pos = anchor_rect.y0 - 2  # Just above the anchor text baseline
 
-    # Position above the anchor line
-    insert_rect = fitz.Rect(
-        anchor_rect.x0,
-        anchor_rect.y0 - fontsize - 2,
-        min(anchor_rect.x0 + text_length + 4, page.rect.width - 20),
-        anchor_rect.y0 - 1,
-    )
+    # If it would go off the top of the page, put it below instead
+    if y_pos < 20:
+        y_pos = anchor_rect.y1 + fontsize
 
-    # Ensure rect is valid and on page
-    if insert_rect.y0 < 10:
-        insert_rect.y0 = anchor_rect.y1 + 1
-        insert_rect.y1 = anchor_rect.y1 + fontsize + 3
-
-    # Add as FreeText annotation with red text
+    tw = fitz.TextWriter(page.rect)
+    origin = fitz.Point(anchor_rect.x0, y_pos)
     try:
-        annot = page.add_freetext_annot(
-            insert_rect,
-            text_to_insert,
-            fontsize=fontsize * 0.85,
-            fontname="helv",
-            text_color=_RED,
-            border_color=None,
-            fill_color=(1, 1, 1),
+        tw.append(origin, text_to_insert, font=font, fontsize=fontsize)
+        tw.write_text(page, color=_RED)
+
+        # Add strikethrough annotation
+        strike_rect = fitz.Rect(
+            anchor_rect.x0, y_pos - fontsize,
+            min(anchor_rect.x0 + text_length, page.rect.width - 20),
+            y_pos + 2,
         )
-        annot.set_opacity(0.9)
+        annot = page.add_strikeout_annot(strike_rect)
+        annot.set_colors(stroke=list(_RED))
         annot.update()
     except Exception as e:
-        logger.debug(f"Could not insert deleted text annotation: {e}")
-
-
-def _is_numbering_only(text: str) -> bool:
-    """Check if text is only a section number like '1.12 ' or '(a) '."""
-    return bool(_RE_LEADING_NUM.fullmatch(text)) or bool(
-        re.fullmatch(r"\d+(?:\.\d+)*\.?\s*", text)
-    )
-
-
-def _only_numbering_changed(segments: list[tuple[str, str]]) -> bool:
-    """Check if the only changes in a paragraph are numbering changes."""
-    for seg_type, seg_text in segments:
-        if seg_type in ("added", "deleted"):
-            if not _is_numbering_only(seg_text):
-                return False
-    return True
+        logger.debug(f"Could not insert deleted text: {e}")
 
 
 def _apply_native_diff(doc, old_paras, new_paras, font_map):
-    """Apply diff colors to the new PDF document."""
+    """Apply diff colors directly to the PDF text.
+
+    For additions: redact original black text, rewrite in blue + underline.
+    For deletions: insert red text with strikethrough.
+    """
     old_texts = [p["text"] for p in old_paras]
     new_texts = [p["text"] for p in new_paras]
 
@@ -598,30 +683,32 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
         if not has_changes:
             continue
 
-        # Skip paragraphs where only the numbering changed (renumbering noise)
+        # Skip paragraphs where only the numbering changed
         if _only_numbering_changed(segments):
             continue
 
         page_hint = new_paras[nj].get("page_num", 0)
 
         for seg_type, seg_text in segments:
-            # Skip numbering-only segments (e.g. "1.11 " -> "1.12 ")
             if _is_numbering_only(seg_text):
                 continue
 
             if seg_type == "added" and seg_text.strip():
-                _mark_text(doc, seg_text, _BLUE, underline=True,
-                           start_page=page_hint)
+                # REDACT + REWRITE in blue with underline
+                _recolor_on_pages(doc, seg_text, _BLUE, font_map,
+                                  underline=True, start_page=page_hint)
+
             elif seg_type == "deleted" and seg_text.strip():
+                # INSERT red text with strikethrough
                 _insert_deleted_text(doc, seg_text, page_hint,
                                      segments, font_map)
 
-    # Entirely new paragraphs: mark all text as blue underline
+    # Entirely new paragraphs: recolor all text to blue
     for j in range(len(new_paras)):
         if j not in matched_new:
             page_hint = new_paras[j].get("page_num", 0)
-            _mark_text(doc, new_paras[j]["text"], _BLUE, underline=True,
-                       start_page=page_hint)
+            _recolor_on_pages(doc, new_paras[j]["text"], _BLUE, font_map,
+                              underline=True, start_page=page_hint)
 
 
 # -- Public API ---------------------------------------------------------------
