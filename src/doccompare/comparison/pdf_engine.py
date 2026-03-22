@@ -687,16 +687,18 @@ def compare_pdfs(
     original_name: str | None = None,
     modified_name: str | None = None,
 ):
-    """Compare two PDFs and produce an annotated diff report.
+    """Compare two PDFs and produce a diff report via WeasyPrint.
 
-    Annotates the newer PDF directly:
-    - Blue highlights for added/changed text
-    - Red comment annotations for deleted text
-    - Preserves 100% of original formatting.
-    - Appends summary/legend page at the end.
+    Renders an HTML document with inline tracked-changes styling:
+    - Blue underlined text for additions
+    - Red strikethrough text for deletions
+    - Same visual output as DOCX comparison.
+    - Summary/legend page appended at the end.
 
     Returns summary dict with word counts.
     """
+    import weasyprint
+
     old_path = Path(old_path)
     new_path = Path(new_path)
     output_pdf = Path(output_pdf)
@@ -715,12 +717,15 @@ def compare_pdfs(
     logger.info("Computing diff")
     summary = _compute_summary(old_paras, new_paras)
 
-    logger.info("Annotating PDF with changes")
-    _annotate_pdf(
-        new_path, output_pdf,
+    logger.info("Rendering diff HTML")
+    diff_html = _render_diff_html(
         old_paras, new_paras, summary,
         original_name, modified_name,
     )
+
+    logger.info("Converting to PDF via WeasyPrint")
+    html_doc = weasyprint.HTML(string=diff_html)
+    html_doc.write_pdf(str(output_pdf))
 
     logger.info(f"PDF comparison report saved: {output_pdf}")
     return summary
