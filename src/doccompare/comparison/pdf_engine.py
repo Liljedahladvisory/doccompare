@@ -16,30 +16,13 @@ Architecture:
 
 import html as html_mod
 import re
-import tempfile
-import zipfile
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
 import diff_match_patch as dmp_module
-from lxml import etree
 from loguru import logger
 from rapidfuzz import fuzz
-
-from doccompare.parsers.pdf_parser import PdfParser
-
-# ── OOXML constants for cleanup ──────────────────────────────────────────
-_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-_W_P = f"{{{_W}}}p"
-_W_R = f"{{{_W}}}r"
-_W_T = f"{{{_W}}}t"
-_W_TAB = f"{{{_W}}}tab"
-_W_PPR = f"{{{_W}}}pPr"
-_W_TABS = f"{{{_W}}}tabs"
-_W_IND = f"{{{_W}}}ind"
-_W_BODY = f"{{{_W}}}body"
-_XML_NS = "http://www.w3.org/XML/1998/namespace"
 
 # ── Regex patterns ───────────────────────────────────────────────────────
 
@@ -166,45 +149,52 @@ def _diff_paragraph(old_text: str, new_text: str) -> list[tuple[str, str]]:
 # ── Paragraph extraction & cleanup ───────────────────────────────────────
 
 def _extract_paragraphs(pdf_path: Path) -> list[dict]:
-    """Extract paragraphs from a PDF with text and basic formatting info.
+    """Extract paragraphs from a PDF with text and formatting info.
+
+    Captures: text, font_size, is_bold, is_italic, indent_level,
+    is_centered, page_num.
 
     Includes post-processing:
     - Filter out headers/footers (repeated text across pages, doc IDs, page numbers)
     - Merge paragraphs broken across page boundaries
-
-    Returns list of dicts: {text, font_size, is_bold, is_italic, page_num}.
     """
     import pdfplumber
-    import fitz  # PyMuPDF
 
-    fitz_doc = fitz.open(str(pdf_path))
-    raw_paras = []  # list of (text, font_size, page_num)
+    raw_paras = []
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         num_pages = len(pdf.pages)
+        page_width = pdf.pages[0].width if pdf.pages else 595
+
+        # Determine left margin from the most common x0 across all pages
+        all_x0 = []
+        for page in pdf.pages:
+            for line in (page.extract_text_lines() or []):
+                all_x0.append(round(line.get("x0", 0), 0))
+
+        if all_x0:
+            from collections import Counter as _Counter
+            x0_counts = _Counter(all_x0)
+            # Left margin = the most common small x0 value
+            common_x0 = sorted(x0_counts.items(), key=lambda x: -x[1])
+            left_margin = min(x for x, _ in common_x0[:3])
+        else:
+            left_margin = 71.0
+
         for page_num, page in enumerate(pdf.pages):
             lines = page.extract_text_lines() or []
             if not lines:
                 continue
 
-            # Group lines into paragraphs (same logic as PdfParser)
-            paragraphs = _group_lines(lines)
+            paragraphs = _group_lines(lines, page_width, left_margin)
 
-            for para_text, avg_size in paragraphs:
-                para_text = para_text.strip()
+            for para in paragraphs:
+                para_text = para["text"].strip()
                 if not para_text:
                     continue
-                raw_paras.append({
-                    "text": para_text,
-                    "font_size": avg_size,
-                    "is_bold": False,
-                    "is_italic": False,
-                    "page_num": page_num,
-                    "element_type": "paragraph",
-                    "level": 0,
-                })
-
-    fitz_doc.close()
+                para["page_num"] = page_num
+                para["element_type"] = "paragraph"
+                raw_paras.append(para)
 
     # Step 1: Detect and filter headers/footers
     paras = _filter_headers_footers(raw_paras, num_pages)
@@ -216,18 +206,93 @@ def _extract_paragraphs(pdf_path: Path) -> list[dict]:
     return paras
 
 
-def _group_lines(lines: list) -> list[tuple[str, float]]:
+def _detect_font_style(chars: list) -> tuple[bool, bool]:
+    """Detect bold/italic from character font names.
+
+    Returns (is_bold, is_italic) based on majority of characters.
+    """
+    if not chars:
+        return False, False
+
+    bold_count = 0
+    italic_count = 0
+    total = 0
+
+    for c in chars:
+        fn = c.get("fontname", "").lower()
+        if not fn or c.get("text", "").strip() == "":
+            continue
+        total += 1
+        if "bold" in fn:
+            bold_count += 1
+        if "italic" in fn or "oblique" in fn:
+            italic_count += 1
+
+    if total == 0:
+        return False, False
+
+    return (bold_count / total > 0.5), (italic_count / total > 0.5)
+
+
+def _group_lines(lines: list, page_width: float, left_margin: float) -> list[dict]:
     """Group text lines into paragraphs based on vertical spacing.
 
-    Returns [(text, avg_font_size), ...].
+    Returns list of dicts with text, font_size, is_bold, is_italic,
+    indent_pt, is_centered.
     """
     if not lines:
         return []
 
     paragraphs = []
-    current_texts = []
-    current_sizes = []
+    current_lines = []  # list of line dicts
     prev_bottom = None
+
+    def _flush():
+        if not current_lines:
+            return
+        # Combine text
+        text = " ".join(l.get("text", "") for l in current_lines)
+
+        # Font size: average from chars
+        all_sizes = []
+        all_chars = []
+        for l in current_lines:
+            chars = l.get("chars", [])
+            all_chars.extend(chars)
+            for c in chars:
+                s = c.get("size")
+                if s:
+                    all_sizes.append(s)
+        avg_size = sum(all_sizes) / len(all_sizes) if all_sizes else 11.0
+
+        # Bold/italic detection from font names
+        is_bold, is_italic = _detect_font_style(all_chars)
+
+        # Indentation: x0 of first line relative to left margin
+        first_x0 = current_lines[0].get("x0", left_margin)
+        indent_pt = max(0, first_x0 - left_margin)
+
+        # Center detection: text center is close to page center
+        first_line = current_lines[0]
+        x0 = first_line.get("x0", 0)
+        x1 = first_line.get("x1", page_width)
+        text_center = (x0 + x1) / 2
+        page_center = page_width / 2
+        is_centered = (
+            abs(text_center - page_center) < 30
+            and (x0 - left_margin) > 30  # significantly indented from left
+            and len(current_lines) <= 3  # short blocks only
+        )
+
+        paragraphs.append({
+            "text": text,
+            "font_size": round(avg_size, 1),
+            "is_bold": is_bold,
+            "is_italic": is_italic,
+            "indent_pt": round(indent_pt, 0),
+            "is_centered": is_centered,
+            "level": 0,
+        })
 
     for line in lines:
         top = line.get("top", 0)
@@ -237,29 +302,15 @@ def _group_lines(lines: list) -> list[tuple[str, float]]:
         if prev_bottom is not None:
             gap = top - prev_bottom
             if gap > height * 0.8:  # Large gap = new paragraph
-                if current_texts:
-                    text = " ".join(current_texts)
-                    avg_size = sum(current_sizes) / len(current_sizes) if current_sizes else 11.0
-                    paragraphs.append((text, avg_size))
-                current_texts = []
-                current_sizes = []
+                _flush()
+                current_lines = []
 
-        line_text = line.get("text", "")
-        if line_text:
-            current_texts.append(line_text)
-            chars = line.get("chars", [])
-            if chars:
-                sizes = [c.get("size", 11) for c in chars if c.get("size")]
-                if sizes:
-                    current_sizes.extend(sizes)
+        if line.get("text", ""):
+            current_lines.append(line)
 
         prev_bottom = bottom
 
-    if current_texts:
-        text = " ".join(current_texts)
-        avg_size = sum(current_sizes) / len(current_sizes) if current_sizes else 11.0
-        paragraphs.append((text, avg_size))
-
+    _flush()
     return paragraphs
 
 
@@ -365,6 +416,11 @@ def _para_to_css(para: dict) -> str:
         parts.append("font-weight: bold")
     if para.get("is_italic"):
         parts.append("font-style: italic")
+    if para.get("is_centered"):
+        parts.append("text-align: center")
+    indent = para.get("indent_pt", 0)
+    if indent > 10:
+        parts.append(f"margin-left: {indent:.0f}pt")
     return "; ".join(parts)
 
 
