@@ -109,26 +109,29 @@ class DocCompareApp:
         header = tk.Frame(outer, bg=BG)
         header.pack(fill="x", pady=(0, 20))
 
-        # Logo
+        # Logo — crop transparent padding from the PNG so it aligns flush
         logo_path = Path(__file__).parent / "assets" / "logo.png"
         try:
             from PIL import Image, ImageTk
-            img = Image.open(logo_path)
+            img = Image.open(logo_path).convert("RGBA")
+            bbox = img.getbbox()  # crop to visible pixels
+            if bbox:
+                img = img.crop(bbox)
             target_h = 32
             ratio = target_h / img.height
             img = img.resize((int(img.width * ratio), target_h), Image.LANCZOS)
             self._logo_img = ImageTk.PhotoImage(img)
-            tk.Label(header, image=self._logo_img, bg=BG).pack(anchor="w", padx=(3, 0))
+            tk.Label(header, image=self._logo_img, bg=BG).pack(anchor="w")
         except Exception:
             logo_frame = tk.Frame(header, bg=BG)
-            logo_frame.pack(anchor="w", padx=(15, 0))
+            logo_frame.pack(anchor="w")
             tk.Label(logo_frame, text="Liljedahl", font=(FONT, 15), bg=BG, fg="#707080").pack(side="left")
             tk.Label(logo_frame, text=" Advisory", font=(FONT, 15, "bold"), bg=BG, fg="#50505e").pack(side="left")
 
         tk.Label(
             header, text="Liljedahl Legal Tech Tools",
-            font=(FONT, 10), bg=BG, fg=SUBTITLE, anchor="w",
-        ).pack(anchor="w", padx=(15, 0), pady=(2, 0))
+            font=(FONT_MONO, 9, "italic"), bg=BG, fg=SUBTITLE, anchor="w",
+        ).pack(anchor="w", pady=(3, 0))
 
         # ── Title block ──────────────────────────────────────────────────
         title_frame = tk.Frame(outer, bg=BG)
