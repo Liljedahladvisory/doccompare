@@ -611,8 +611,9 @@ def _annotate_pdf(
     matched_old = {i for i, _ in matches}
     matched_new = {j for _, j in matches}
 
-    # Highlight color — blue for additions
-    BLUE = (0.0, 0.28, 0.67)  # #0047ab — matches the CSS .added color
+    # Annotation colors
+    BLUE = (0.0, 0.28, 0.67)       # Blue for underlines on changed text
+    YELLOW = (1.0, 0.95, 0.6)      # Soft yellow for new paragraph highlights
 
     # Track annotations added per page for comment positioning
     page_comment_y: dict[int, float] = {}
@@ -634,23 +635,21 @@ def _annotate_pdf(
             elif seg_type == "deleted":
                 deleted_parts.append(seg_text)
 
-        # Highlight added text in the PDF (search in new PDF)
+        # Underline added text in blue (inline changes)
         for added_text in added_parts:
-            # Search for the text across all pages
-            _highlight_text(doc, added_text, BLUE)
+            _underline_text(doc, added_text, BLUE)
 
         # Add deleted text as margin comments
         if deleted_parts:
             deleted_combined = " [...] ".join(deleted_parts)
-            # Find where the new paragraph text appears to place comment nearby
             new_text_snippet = new_paras[nj]["text"][:60]
             _add_deletion_comment(doc, new_text_snippet, deleted_combined, page_comment_y)
 
-    # Mark entirely new paragraphs (unmatched in new)
+    # Mark entirely new paragraphs with soft yellow highlight
     for j in range(len(new_paras)):
         if j not in matched_new:
             text = new_paras[j]["text"]
-            _highlight_text(doc, text, BLUE)
+            _highlight_text(doc, text, YELLOW)
 
     # Mark entirely deleted paragraphs (unmatched in old)
     deleted_whole = []
@@ -685,32 +684,49 @@ def _annotate_pdf(
 
 
 def _highlight_text(doc, text: str, color: tuple):
-    """Search for text in the PDF and add highlight annotations.
+    """Search for text in the PDF and add a soft highlight annotation.
 
-    Skips very short strings (<6 chars) to avoid false-positive matches
-    on common substrings like "(c)", "1.1", etc.
+    Used for entirely new paragraphs. Skips short strings to avoid
+    false-positive matches.
     """
-    import fitz
-
-    # Skip very short strings — they match everywhere and create false positives
     if not text or len(text.strip()) < 6:
         return
 
-    # Search for the text (or a reasonable chunk of it)
-    # Use a middle section for better uniqueness (avoid leading numbering)
     search_text = text.strip()
     if len(search_text) > 100:
         search_text = search_text[:100]
 
     for page in doc:
-        rects = page.search_for(search_text, quads=True)
-        if rects:
-            for quad in rects:
-                annot = page.add_highlight_annot(quad)
-                annot.set_colors(stroke=color)
-                annot.set_opacity(0.35)
-                annot.update()
-            break  # Found on this page, no need to check others
+        quads = page.search_for(search_text, quads=True)
+        if quads:
+            annot = page.add_highlight_annot(quads)
+            annot.set_colors(stroke=color)
+            annot.set_opacity(0.4)
+            annot.update()
+            break
+
+
+def _underline_text(doc, text: str, color: tuple):
+    """Search for text in the PDF and add a blue underline annotation.
+
+    Used for inline additions within changed paragraphs — cleaner than
+    a colored highlight. Skips short strings to avoid false positives.
+    """
+    if not text or len(text.strip()) < 6:
+        return
+
+    search_text = text.strip()
+    if len(search_text) > 100:
+        search_text = search_text[:100]
+
+    for page in doc:
+        quads = page.search_for(search_text, quads=True)
+        if quads:
+            annot = page.add_underline_annot(quads)
+            annot.set_colors(stroke=color)
+            annot.set_opacity(0.8)
+            annot.update()
+            break
 
 
 def _add_deletion_comment(
