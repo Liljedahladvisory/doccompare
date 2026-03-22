@@ -2,16 +2,17 @@
 
 Compares two PDF files by extracting text (via pdfplumber), diffing paragraphs
 with the same weighted-LCS + diff_match_patch approach as the OOXML engine,
-and producing an HTML report with tracked-changes styling rendered via WeasyPrint.
+and producing output with tracked-changes styling.
 
 Architecture:
-  1. Extract paragraphs from both PDFs (pdfplumber + PyMuPDF for font info)
+  1. Extract paragraphs from both PDFs (pdfplumber for text + char info)
   2. Clean up: filter headers/footers, merge cross-page paragraphs
   3. Strip leading numbering before matching (avoids renumbering noise)
   4. Match paragraphs via weighted LCS (same algorithm as ooxml_engine)
   5. Character-level diff on matched pairs (diff_match_patch)
-  6. Build HTML with <span class="added"> / <span class="deleted"> markup
-  7. Render to PDF via WeasyPrint
+  6. Clone the new PDF as base, mark additions (blue underline),
+     insert deletions (red strikethrough) — preserves original formatting
+  7. Append summary/legend page
 """
 
 import html as html_mod
@@ -24,7 +25,7 @@ import diff_match_patch as dmp_module
 from loguru import logger
 from rapidfuzz import fuzz
 
-# ── Regex patterns ───────────────────────────────────────────────────────
+# -- Regex patterns -----------------------------------------------------------
 
 # Leading numbering: "1.12 ", "12.3.4 ", "(a) ", "(iv) ", "a) " etc.
 _RE_LEADING_NUM = re.compile(
@@ -41,12 +42,12 @@ _RE_HEADER_FOOTER = re.compile(
     r"|^Page\s+\d+\s+of\s+\d+"       # "Page 1 of 42"
     r"|^\d+\s*$"                       # bare page number
     r"|^\d+\s*\|\s*\d+"              # "21 | 42" style page numbers
-    r"|^[-–—]\s*\d+\s*[-–—]"         # "- 21 -" style page numbers
+    r"|^[-\u2013\u2014]\s*\d+\s*[-\u2013\u2014]"   # "- 21 -" style
     r"|MATTER\s+\d+\s*\|\s*\d+"      # "MATTER 3 | 21" anywhere
 , re.IGNORECASE)
 
 
-# ── Diff helpers ─────────────────────────────────────────────────────────
+# -- Diff helpers -------------------------------------------------------------
 
 def _similarity(a: str, b: str) -> float:
     if not a and not b:
@@ -62,14 +63,9 @@ def _strip_numbering(text: str) -> str:
 
 
 def _match_paragraphs(old_paras: list[str], new_paras: list[str]) -> list[tuple[int, int]]:
-    """Weighted LCS matching of paragraph texts.
-
-    Compares on numbering-stripped text to avoid renumbering noise,
-    but uses original text for the actual diff.
-    """
+    """Weighted LCS matching of paragraph texts."""
     n, m = len(old_paras), len(new_paras)
 
-    # Strip numbering for matching to avoid renumbering creating mismatches
     old_stripped = [_strip_numbering(t) for t in old_paras]
     new_stripped = [_strip_numbering(t) for t in new_paras]
 
@@ -109,7 +105,7 @@ def _diff_paragraph(old_text: str, new_text: str) -> list[tuple[str, str]]:
     """Character-level diff returning [(type, text), ...].
 
     Diffs on the numbering-stripped body, then prepends numbering changes
-    as a single unit (avoids character-level noise on "1.11" → "1.12").
+    as a single unit (avoids character-level noise on "1.11" -> "1.12").
     """
     old_num_m = _RE_LEADING_NUM.match(old_text)
     new_num_m = _RE_LEADING_NUM.match(new_text)
@@ -146,18 +142,10 @@ def _diff_paragraph(old_text: str, new_text: str) -> list[tuple[str, str]]:
     return result
 
 
-# ── Paragraph extraction & cleanup ───────────────────────────────────────
+# -- Paragraph extraction & cleanup ------------------------------------------
 
 def _extract_paragraphs(pdf_path: Path) -> list[dict]:
-    """Extract paragraphs from a PDF with text and formatting info.
-
-    Captures: text, font_size, is_bold, is_italic, indent_level,
-    is_centered, page_num.
-
-    Includes post-processing:
-    - Filter out headers/footers (repeated text across pages, doc IDs, page numbers)
-    - Merge paragraphs broken across page boundaries
-    """
+    """Extract paragraphs from a PDF with text and formatting info."""
     import pdfplumber
 
     raw_paras = []
@@ -173,9 +161,7 @@ def _extract_paragraphs(pdf_path: Path) -> list[dict]:
                 all_x0.append(round(line.get("x0", 0), 0))
 
         if all_x0:
-            from collections import Counter as _Counter
-            x0_counts = _Counter(all_x0)
-            # Left margin = the most common small x0 value
+            x0_counts = Counter(all_x0)
             common_x0 = sorted(x0_counts.items(), key=lambda x: -x[1])
             left_margin = min(x for x, _ in common_x0[:3])
         else:
@@ -207,10 +193,7 @@ def _extract_paragraphs(pdf_path: Path) -> list[dict]:
 
 
 def _detect_font_style(chars: list) -> tuple[bool, bool]:
-    """Detect bold/italic from character font names.
-
-    Returns (is_bold, is_italic) based on majority of characters.
-    """
+    """Detect bold/italic from character font names."""
     if not chars:
         return False, False
 
@@ -235,25 +218,19 @@ def _detect_font_style(chars: list) -> tuple[bool, bool]:
 
 
 def _group_lines(lines: list, page_width: float, left_margin: float) -> list[dict]:
-    """Group text lines into paragraphs based on vertical spacing.
-
-    Returns list of dicts with text, font_size, is_bold, is_italic,
-    indent_pt, is_centered.
-    """
+    """Group text lines into paragraphs based on vertical spacing."""
     if not lines:
         return []
 
     paragraphs = []
-    current_lines = []  # list of line dicts
+    current_lines = []
     prev_bottom = None
 
     def _flush():
         if not current_lines:
             return
-        # Combine text
         text = " ".join(l.get("text", "") for l in current_lines)
 
-        # Font size: average from chars
         all_sizes = []
         all_chars = []
         for l in current_lines:
@@ -265,14 +242,11 @@ def _group_lines(lines: list, page_width: float, left_margin: float) -> list[dic
                     all_sizes.append(s)
         avg_size = sum(all_sizes) / len(all_sizes) if all_sizes else 11.0
 
-        # Bold/italic detection from font names
         is_bold, is_italic = _detect_font_style(all_chars)
 
-        # Indentation: x0 of first line relative to left margin
         first_x0 = current_lines[0].get("x0", left_margin)
         indent_pt = max(0, first_x0 - left_margin)
 
-        # Center detection: text center is close to page center
         first_line = current_lines[0]
         x0 = first_line.get("x0", 0)
         x1 = first_line.get("x1", page_width)
@@ -280,8 +254,8 @@ def _group_lines(lines: list, page_width: float, left_margin: float) -> list[dic
         page_center = page_width / 2
         is_centered = (
             abs(text_center - page_center) < 30
-            and (x0 - left_margin) > 30  # significantly indented from left
-            and len(current_lines) <= 3  # short blocks only
+            and (x0 - left_margin) > 30
+            and len(current_lines) <= 3
         )
 
         paragraphs.append({
@@ -301,7 +275,7 @@ def _group_lines(lines: list, page_width: float, left_margin: float) -> list[dic
 
         if prev_bottom is not None:
             gap = top - prev_bottom
-            if gap > height * 0.8:  # Large gap = new paragraph
+            if gap > height * 0.8:
                 _flush()
                 current_lines = []
 
@@ -315,29 +289,20 @@ def _group_lines(lines: list, page_width: float, left_margin: float) -> list[dic
 
 
 def _filter_headers_footers(paras: list[dict], num_pages: int) -> list[dict]:
-    """Remove header/footer lines that repeat across pages.
-
-    Strategy:
-    1. Regex-match obvious patterns (doc IDs, page numbers, "MATTER X | Y")
-    2. Find short texts that appear on many pages (>40% of pages) — likely headers/footers
-    """
+    """Remove header/footer lines that repeat across pages."""
     if num_pages < 2:
         return paras
 
-    # Count occurrences of short texts across different pages
-    # Normalize: strip digits to catch "Page 1 of 42" / "Page 2 of 42" etc.
     text_page_sets: dict[str, set[int]] = {}
     for p in paras:
         t = p["text"].strip()
-        if len(t) > 80:  # Headers/footers are short
+        if len(t) > 80:
             continue
-        # Normalize: replace digits with # for pattern matching
         normalized = re.sub(r"\d+", "#", t)
         if normalized not in text_page_sets:
             text_page_sets[normalized] = set()
         text_page_sets[normalized].add(p["page_num"])
 
-    # Patterns appearing on >40% of pages are headers/footers
     threshold = max(2, num_pages * 0.4)
     repeated_patterns = {
         pat for pat, pages in text_page_sets.items()
@@ -348,19 +313,14 @@ def _filter_headers_footers(paras: list[dict], num_pages: int) -> list[dict]:
     removed = 0
     for p in paras:
         t = p["text"].strip()
-
-        # Regex filter
         if _RE_HEADER_FOOTER.search(t):
             removed += 1
             continue
-
-        # Repeated pattern filter
         if len(t) <= 80:
             normalized = re.sub(r"\d+", "#", t)
             if normalized in repeated_patterns:
                 removed += 1
                 continue
-
         filtered.append(p)
 
     if removed:
@@ -369,12 +329,7 @@ def _filter_headers_footers(paras: list[dict], num_pages: int) -> list[dict]:
 
 
 def _merge_cross_page(paras: list[dict]) -> list[dict]:
-    """Merge paragraphs that were split at page boundaries.
-
-    Heuristic: if a paragraph at page end doesn't end with sentence-ending
-    punctuation and the next paragraph on the next page starts with a
-    lowercase letter, they're likely one paragraph split across pages.
-    """
+    """Merge paragraphs that were split at page boundaries."""
     if len(paras) < 2:
         return paras
 
@@ -383,18 +338,14 @@ def _merge_cross_page(paras: list[dict]) -> list[dict]:
         prev = merged[-1]
         curr = paras[i]
 
-        # Only merge across page boundaries
         if prev["page_num"] != curr["page_num"] and curr["page_num"] == prev["page_num"] + 1:
             prev_text = prev["text"].rstrip()
             curr_text = curr["text"].lstrip()
 
-            # Merge if: previous doesn't end with terminal punctuation
-            # AND current starts with lowercase (continuation)
             if (prev_text and curr_text
                     and prev_text[-1] not in ".!?:;\"'"
                     and curr_text[0].islower()):
                 prev["text"] = prev_text + " " + curr_text
-                # Keep the earlier page_num
                 continue
 
         merged.append(curr)
@@ -404,198 +355,7 @@ def _merge_cross_page(paras: list[dict]) -> list[dict]:
     return merged
 
 
-# ── HTML generation ──────────────────────────────────────────────────────
-
-def _para_to_css(para: dict) -> str:
-    """Generate inline CSS for a paragraph based on extracted formatting."""
-    parts = []
-    fs = para.get("font_size", 11.0)
-    if fs and fs != 11.0:
-        parts.append(f"font-size: {fs:.1f}pt")
-    if para.get("is_bold"):
-        parts.append("font-weight: bold")
-    if para.get("is_italic"):
-        parts.append("font-style: italic")
-    if para.get("is_centered"):
-        parts.append("text-align: center")
-    indent = para.get("indent_pt", 0)
-    if indent > 10:
-        parts.append(f"margin-left: {indent:.0f}pt")
-    return "; ".join(parts)
-
-
-def _render_diff_html(
-    old_paras: list[dict],
-    new_paras: list[dict],
-    summary: dict,
-    original_name: str,
-    modified_name: str,
-) -> str:
-    """Render the diff as an HTML document with tracked-changes styling."""
-    old_texts = [p["text"] for p in old_paras]
-    new_texts = [p["text"] for p in new_paras]
-
-    matches = _match_paragraphs(old_texts, new_texts)
-    matched_old = {i for i, _ in matches}
-    matched_new = {j for _, j in matches}
-
-    # Build an ordered list of output paragraphs
-    output_parts = []
-    new_to_old = {j: i for i, j in matches}
-    old_output = set()
-    prev_old_idx = -1
-
-    for nj in range(len(new_paras)):
-        if nj in new_to_old:
-            oi = new_to_old[nj]
-            # Insert deletions: unmatched old paragraphs between prev_old_idx and oi
-            for k in range(prev_old_idx + 1, oi):
-                if k not in matched_old:
-                    css = _para_to_css(old_paras[k])
-                    style_attr = f' style="{css}"' if css else ""
-                    escaped = html_mod.escape(old_paras[k]["text"])
-                    output_parts.append(
-                        f'<p class="element-deleted"{style_attr}>'
-                        f'<span class="deleted">{escaped}</span></p>'
-                    )
-                    old_output.add(k)
-            prev_old_idx = oi
-
-            # Render the matched pair with inline diff
-            diff_segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
-            css = _para_to_css(new_paras[nj])
-            style_attr = f' style="{css}"' if css else ""
-
-            spans = []
-            for seg_type, seg_text in diff_segments:
-                escaped = html_mod.escape(seg_text)
-                if seg_type == "equal":
-                    spans.append(escaped)
-                elif seg_type == "added":
-                    spans.append(f'<span class="added">{escaped}</span>')
-                elif seg_type == "deleted":
-                    spans.append(f'<span class="deleted">{escaped}</span>')
-
-            output_parts.append(f'<p{style_attr}>{"".join(spans)}</p>')
-        else:
-            # Unmatched new paragraph = insertion
-            css = _para_to_css(new_paras[nj])
-            style_attr = f' style="{css}"' if css else ""
-            escaped = html_mod.escape(new_paras[nj]["text"])
-            output_parts.append(
-                f'<p class="element-added"{style_attr}>'
-                f'<span class="added">{escaped}</span></p>'
-            )
-
-    # Any remaining unmatched old paragraphs at the end
-    for k in range(prev_old_idx + 1, len(old_paras)):
-        if k not in matched_old and k not in old_output:
-            css = _para_to_css(old_paras[k])
-            style_attr = f' style="{css}"' if css else ""
-            escaped = html_mod.escape(old_paras[k]["text"])
-            output_parts.append(
-                f'<p class="element-deleted"{style_attr}>'
-                f'<span class="deleted">{escaped}</span></p>'
-            )
-
-    content_html = "\n".join(output_parts)
-
-    # Summary page
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    added = summary.get("added_words", 0)
-    deleted = summary.get("deleted_words", 0)
-    unchanged = summary.get("unchanged_words", 0)
-
-    css_path = Path(__file__).parent.parent / "rendering" / "styles.css"
-    css = css_path.read_text(encoding="utf-8")
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>DocCompare &mdash; {html_mod.escape(original_name)} vs {html_mod.escape(modified_name)}</title>
-<style>
-{css}
-
-/* Summary page — forced onto new page */
-.summary-page {{
-    page-break-before: always;
-    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-}}
-.summary-title {{
-    font-size: 18pt;
-    font-weight: 700;
-    color: #2c3e50;
-    margin-bottom: 8pt;
-}}
-.summary-meta {{
-    font-size: 9pt;
-    color: #555;
-    border-top: 1px solid #bdc3c7;
-    padding-top: 8pt;
-    margin-bottom: 16pt;
-}}
-.summary-stats {{
-    margin-bottom: 20pt;
-}}
-.summary-stats .stat {{
-    display: block;
-    margin-bottom: 4pt;
-    font-size: 11pt;
-}}
-.summary-stats .stat-added {{ color: #2e97d3; }}
-.summary-stats .stat-deleted {{ color: #b5082e; }}
-.summary-legend h3 {{
-    font-size: 13pt;
-    color: #2c3e50;
-    margin-bottom: 8pt;
-}}
-.summary-legend p {{
-    font-size: 10pt;
-    margin-bottom: 6pt;
-}}
-.summary-footer {{
-    margin-top: 24pt;
-    padding-top: 8pt;
-    border-top: 1px solid #bdc3c7;
-    font-size: 8pt;
-    color: #888;
-}}
-</style>
-</head>
-<body>
-    {content_html}
-
-    <div class="summary-page">
-        <h2 class="summary-title">DocCompare &mdash; Summary</h2>
-        <div class="summary-meta">
-            <strong>Original:</strong> {html_mod.escape(original_name)} &nbsp;|&nbsp;
-            <strong>Modified:</strong> {html_mod.escape(modified_name)} &nbsp;|&nbsp;
-            <strong>Date:</strong> {now}
-        </div>
-        <div class="summary-stats">
-            <div class="stat stat-added">+{added} words added</div>
-            <div class="stat stat-deleted">&minus;{deleted} words deleted</div>
-            <div class="stat">{unchanged} words unchanged</div>
-        </div>
-        <div class="summary-legend">
-            <h3>Legend</h3>
-            <p><span class="added">Added text</span> &mdash;
-               text present in the modified document but not in the original.</p>
-            <p><span class="deleted">Deleted text</span> &mdash;
-               text present in the original but not in the modified document.</p>
-            <p>Unchanged text &mdash;
-               text identical in both documents.</p>
-        </div>
-        <div class="summary-footer">
-            Generated by DocCompare &mdash; a Liljedahl Legal Tech Tool from Liljedahl Advisory AB
-        </div>
-    </div>
-</body>
-</html>"""
-
-
-# ── Summary computation ──────────────────────────────────────────────────
+# -- Summary computation ------------------------------------------------------
 
 def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
     """Compute word-level summary from paragraph diffs."""
@@ -610,7 +370,6 @@ def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
     deleted_words = 0
     unchanged_words = 0
 
-    # Matched pairs: character diff
     for oi, nj in matches:
         diff_segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
         for seg_type, seg_text in diff_segments:
@@ -622,12 +381,10 @@ def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
             elif seg_type == "deleted":
                 deleted_words += wc
 
-    # Unmatched old = all deleted
     for i in range(len(old_paras)):
         if i not in matched_old:
             deleted_words += len(old_paras[i]["text"].split())
 
-    # Unmatched new = all added
     for j in range(len(new_paras)):
         if j not in matched_new:
             added_words += len(new_paras[j]["text"].split())
@@ -639,102 +396,211 @@ def _compute_summary(old_paras: list[dict], new_paras: list[dict]) -> dict:
     }
 
 
-# ── Direct PDF annotation ────────────────────────────────────────────────
+# -- PDF-native diff rendering ------------------------------------------------
+#
+# Strategy: clone the new PDF, mark additions with blue underline,
+# insert deleted text with red strikethrough.
+# Original formatting is 100% preserved.
 
-def _annotate_pdf(
-    new_pdf_path: Path,
-    output_pdf: Path,
-    old_paras: list[dict],
-    new_paras: list[dict],
-    summary: dict,
-    original_name: str,
-    modified_name: str,
-):
-    """Annotate the newer PDF with blue underlines on new/changed text.
+_BLUE = (0.18, 0.59, 0.83)    # #2e97d3 -- additions (matches Word)
+_RED = (0.71, 0.03, 0.18)     # #b5082e -- deletions (matches Word)
 
-    Clean and simple:
-    - Blue underline on added/changed text
-    - Nothing else on the document itself
-    - Deleted text listed on the summary page
-    - 100% of original formatting preserved.
-    """
-    import fitz  # PyMuPDF
 
-    doc = fitz.open(str(new_pdf_path))
+def _extract_fonts(doc) -> dict:
+    """Extract embedded fonts from the PDF for text rewriting."""
+    import fitz
 
+    font_map = {}
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        for f in page.get_fonts(full=True):
+            xref = f[0]
+            name = f[3]
+            base = name.split("+")[-1] if "+" in name else name
+            if base in font_map:
+                continue
+            try:
+                buf = doc.extract_font(xref)[-1]
+                if buf:
+                    font_map[base] = fitz.Font(fontbuffer=buf)
+            except Exception:
+                pass
+    return font_map
+
+
+def _get_font(font_map: dict, font_name: str):
+    """Look up a font, falling back to base-name matching then Helvetica."""
+    import fitz
+
+    base = font_name.split("+")[-1] if "+" in font_name else font_name
+    if base in font_map:
+        return font_map[base]
+
+    for name, font in font_map.items():
+        if name.lower() == base.lower():
+            return font
+
+    try:
+        return fitz.Font("helv")
+    except Exception:
+        return None
+
+
+def _mark_text(doc, text: str, color: tuple, underline=False,
+               strikethrough=False, start_page=0):
+    """Search for text in the PDF and add colored annotation."""
+    import fitz
+
+    if not text or len(text.strip()) < 2:
+        return
+
+    search = text.strip()
+    # For very long text, split into chunks
+    if len(search) > 120:
+        _mark_text(doc, search[:80], color, underline, strikethrough, start_page)
+        _mark_text(doc, search[80:], color, underline, strikethrough, start_page)
+        return
+
+    # Try nearby pages first, then all pages
+    page_ranges = [
+        range(start_page, min(start_page + 3, len(doc))),
+        range(len(doc)),
+    ]
+
+    for page_range in page_ranges:
+        for pi in page_range:
+            page = doc[pi]
+            quads = page.search_for(search, quads=True)
+            if quads:
+                if underline:
+                    annot = page.add_underline_annot(quads)
+                    annot.set_colors(stroke=list(color))
+                    annot.update()
+                if strikethrough:
+                    annot = page.add_strikeout_annot(quads)
+                    annot.set_colors(stroke=list(color))
+                    annot.update()
+                return
+
+
+def _insert_deleted_text(doc, deleted_text: str, page_num: int,
+                         segments: list, font_map: dict):
+    """Insert deleted text as a FreeText annotation near the paragraph."""
+    import fitz
+
+    if not deleted_text.strip() or len(deleted_text.strip()) < 2:
+        return
+
+    page = doc[min(page_num, len(doc) - 1)]
+
+    # Find context: nearest equal/added text to anchor the position
+    anchor_rect = None
+    for seg_type, seg_text in segments:
+        if seg_type in ("equal", "added") and len(seg_text.strip()) >= 4:
+            search = seg_text.strip()[:60]
+            rects = page.search_for(search)
+            if rects:
+                anchor_rect = rects[0]
+                break
+
+    if not anchor_rect:
+        return
+
+    # Get font info from anchor area
+    fontsize = 10.1
+    font = None
+    td = page.get_text("dict", clip=anchor_rect)
+    for block in td.get("blocks", []):
+        if "lines" not in block:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                fontsize = span["size"]
+                font = _get_font(font_map, span["font"])
+                break
+            if font:
+                break
+        if font:
+            break
+
+    if not font:
+        font = _get_font(font_map, "ArialMT")
+    if not font:
+        return
+
+    text_to_insert = deleted_text.strip()
+    if len(text_to_insert) > 150:
+        text_to_insert = text_to_insert[:150] + "..."
+
+    # Calculate width needed
+    text_length = font.text_length(text_to_insert, fontsize=fontsize)
+
+    # Position above the anchor line
+    insert_rect = fitz.Rect(
+        anchor_rect.x0,
+        anchor_rect.y0 - fontsize - 2,
+        min(anchor_rect.x0 + text_length + 4, page.rect.width - 20),
+        anchor_rect.y0 - 1,
+    )
+
+    # Ensure rect is valid and on page
+    if insert_rect.y0 < 10:
+        insert_rect.y0 = anchor_rect.y1 + 1
+        insert_rect.y1 = anchor_rect.y1 + fontsize + 3
+
+    # Add as FreeText annotation with red text
+    try:
+        annot = page.add_freetext_annot(
+            insert_rect,
+            text_to_insert,
+            fontsize=fontsize * 0.85,
+            fontname="helv",
+            text_color=_RED,
+            border_color=None,
+            fill_color=(1, 1, 1),
+        )
+        annot.set_opacity(0.9)
+        annot.update()
+    except Exception as e:
+        logger.debug(f"Could not insert deleted text annotation: {e}")
+
+
+def _apply_native_diff(doc, old_paras, new_paras, font_map):
+    """Apply diff colors to the new PDF document."""
     old_texts = [p["text"] for p in old_paras]
     new_texts = [p["text"] for p in new_paras]
 
     matches = _match_paragraphs(old_texts, new_texts)
+    matched_old = {i for i, _ in matches}
     matched_new = {j for _, j in matches}
 
-    BLUE = (0.0, 0.28, 0.67)
-
-    # Collect deleted text for the summary page
-    deletions = []
-
-    # Matched pairs — underline added segments
+    # Process each matched pair
     for oi, nj in matches:
-        diff_segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
+        segments = _diff_paragraph(old_paras[oi]["text"], new_paras[nj]["text"])
 
-        for seg_type, seg_text in diff_segments:
-            if seg_type == "added":
-                _underline_text(doc, seg_text, BLUE)
-            elif seg_type == "deleted":
-                deletions.append(seg_text)
+        has_changes = any(t != "equal" for t, _ in segments)
+        if not has_changes:
+            continue
 
-    # Entirely new paragraphs — underline them
+        page_hint = new_paras[nj].get("page_num", 0)
+
+        for seg_type, seg_text in segments:
+            if seg_type == "added" and seg_text.strip():
+                _mark_text(doc, seg_text, _BLUE, underline=True,
+                           start_page=page_hint)
+            elif seg_type == "deleted" and seg_text.strip():
+                _insert_deleted_text(doc, seg_text, page_hint,
+                                     segments, font_map)
+
+    # Entirely new paragraphs: mark all text as blue underline
     for j in range(len(new_paras)):
         if j not in matched_new:
-            _underline_text(doc, new_paras[j]["text"], BLUE)
-
-    # Collect entirely deleted paragraphs for summary
-    matched_old = {i for i, _ in matches}
-    for i in range(len(old_paras)):
-        if i not in matched_old:
-            deletions.append(old_paras[i]["text"])
-
-    # Save annotated PDF, generate summary+deletions page, merge
-    annotated_bytes = doc.tobytes()
-    doc.close()
-
-    from doccompare.rendering.pdf_pipeline import _render_summary_pdf, _merge_pdfs
-
-    summary_bytes = _render_summary_pdf(
-        summary, original_name, modified_name, deletions=deletions,
-    )
-
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(annotated_bytes)
-        tmp_path = Path(tmp.name)
-
-    try:
-        _merge_pdfs(tmp_path, summary_bytes, output_pdf)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+            page_hint = new_paras[j].get("page_num", 0)
+            _mark_text(doc, new_paras[j]["text"], _BLUE, underline=True,
+                       start_page=page_hint)
 
 
-def _underline_text(doc, text: str, color: tuple):
-    """Search for text in the PDF and add a blue underline annotation."""
-    if not text or len(text.strip()) < 6:
-        return
-
-    search_text = text.strip()
-    if len(search_text) > 100:
-        search_text = search_text[:100]
-
-    for page in doc:
-        quads = page.search_for(search_text, quads=True)
-        if quads:
-            annot = page.add_underline_annot(quads)
-            annot.set_colors(stroke=color)
-            annot.set_opacity(0.8)
-            annot.update()
-            break
-
-
-# ── Public API ───────────────────────────────────────────────────────────
+# -- Public API ---------------------------------------------------------------
 
 def compare_pdfs(
     old_path: Path,
@@ -743,17 +609,18 @@ def compare_pdfs(
     original_name: str | None = None,
     modified_name: str | None = None,
 ):
-    """Compare two PDFs and produce a diff report via WeasyPrint.
+    """Compare two PDFs preserving original layout and formatting.
 
-    Renders an HTML document with inline tracked-changes styling:
-    - Blue underlined text for additions
-    - Red strikethrough text for deletions
-    - Same visual output as DOCX comparison.
+    Uses the new PDF as the visual base:
+    - Added text marked with blue underline (in-place)
+    - Deleted text inserted as red annotations
+    - 100% of original formatting, fonts, and layout preserved
     - Summary/legend page appended at the end.
 
     Returns summary dict with word counts.
     """
-    import weasyprint
+    import fitz
+    import tempfile
 
     old_path = Path(old_path)
     new_path = Path(new_path)
@@ -773,15 +640,38 @@ def compare_pdfs(
     logger.info("Computing diff")
     summary = _compute_summary(old_paras, new_paras)
 
-    logger.info("Rendering diff HTML")
-    diff_html = _render_diff_html(
-        old_paras, new_paras, summary,
-        original_name, modified_name,
+    logger.info("Applying diff annotations to PDF")
+    doc = fitz.open(str(new_path))
+    font_map = _extract_fonts(doc)
+
+    _apply_native_diff(doc, old_paras, new_paras, font_map)
+
+    annotated_bytes = doc.tobytes()
+    doc.close()
+
+    # Collect fully deleted paragraphs for summary page
+    old_texts = [p["text"] for p in old_paras]
+    new_texts = [p["text"] for p in new_paras]
+    matches = _match_paragraphs(old_texts, new_texts)
+    matched_old = {i for i, _ in matches}
+    deletions = [old_paras[i]["text"] for i in range(len(old_paras))
+                 if i not in matched_old]
+
+    # Generate summary page and merge
+    from doccompare.rendering.pdf_pipeline import _render_summary_pdf, _merge_pdfs
+
+    summary_bytes = _render_summary_pdf(
+        summary, original_name, modified_name, deletions=deletions,
     )
 
-    logger.info("Converting to PDF via WeasyPrint")
-    html_doc = weasyprint.HTML(string=diff_html)
-    html_doc.write_pdf(str(output_pdf))
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(annotated_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        _merge_pdfs(tmp_path, summary_bytes, output_pdf)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
     logger.info(f"PDF comparison report saved: {output_pdf}")
     return summary
