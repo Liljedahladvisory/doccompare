@@ -600,10 +600,12 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
         for si in recolor_spans:
             sp = spans[si]
             r = fitz.Rect(sp["bbox"])
-            page.add_redact_annot(r, text="")
+            annot = page.add_redact_annot(r, text="")
+            annot.set_colors(stroke=None, fill=(1, 1, 1))  # white fill, no border
+            annot.update()
 
         if recolor_spans:
-            page.apply_redactions()
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
 
         # Step 2: Rewrite recolored spans in blue
         for si in recolor_spans:
@@ -629,7 +631,7 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
             except Exception:
                 pass
 
-        # Step 3: Insert deleted text in red
+        # Step 3: Insert deleted text in red with strikethrough
         for del_text, anchor_si in deletions_to_insert:
             if not del_text.strip():
                 continue
@@ -645,12 +647,13 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
 
             fontsize = anchor["size"]
             text_length = font.text_length(text_to_write, fontsize=fontsize)
+            is_short = len(text_to_write) < 20  # short = numbering etc.
 
-            # Position: same x as anchor, on the line above
+            # Positioning: short deletions go on the line ABOVE at same x
+            # (right above the new numbering). Long deletions also above.
             x = anchor["bbox"][0]
-            y = anchor["origin"][1] - fontsize - 1
+            y = anchor["origin"][1] - fontsize - 2
 
-            # If too close to top of page, skip
             if y < 15:
                 continue
 
@@ -660,11 +663,11 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
                           font=font, fontsize=fontsize)
                 tw.write_text(page, color=_RED)
 
-                # Strikethrough annotation
+                # Strikethrough annotation over the red text
                 strike_rect = fitz.Rect(
-                    x, y - fontsize,
+                    x, y - fontsize + 2,
                     min(x + text_length, page.rect.width - 15),
-                    y + 2,
+                    y + 3,
                 )
                 annot = page.add_strikeout_annot(strike_rect)
                 annot.set_colors(stroke=list(_RED))
