@@ -565,6 +565,22 @@ def _insert_deleted_text(doc, deleted_text: str, page_num: int,
         logger.debug(f"Could not insert deleted text annotation: {e}")
 
 
+def _is_numbering_only(text: str) -> bool:
+    """Check if text is only a section number like '1.12 ' or '(a) '."""
+    return bool(_RE_LEADING_NUM.fullmatch(text)) or bool(
+        re.fullmatch(r"\d+(?:\.\d+)*\.?\s*", text)
+    )
+
+
+def _only_numbering_changed(segments: list[tuple[str, str]]) -> bool:
+    """Check if the only changes in a paragraph are numbering changes."""
+    for seg_type, seg_text in segments:
+        if seg_type in ("added", "deleted"):
+            if not _is_numbering_only(seg_text):
+                return False
+    return True
+
+
 def _apply_native_diff(doc, old_paras, new_paras, font_map):
     """Apply diff colors to the new PDF document."""
     old_texts = [p["text"] for p in old_paras]
@@ -582,9 +598,17 @@ def _apply_native_diff(doc, old_paras, new_paras, font_map):
         if not has_changes:
             continue
 
+        # Skip paragraphs where only the numbering changed (renumbering noise)
+        if _only_numbering_changed(segments):
+            continue
+
         page_hint = new_paras[nj].get("page_num", 0)
 
         for seg_type, seg_text in segments:
+            # Skip numbering-only segments (e.g. "1.11 " -> "1.12 ")
+            if _is_numbering_only(seg_text):
+                continue
+
             if seg_type == "added" and seg_text.strip():
                 _mark_text(doc, seg_text, _BLUE, underline=True,
                            start_page=page_hint)
