@@ -810,6 +810,48 @@ def _word_temp_dir() -> Path:
     return d
 
 
+def _pdf_to_docx_headless(pdf_path: Path, docx_path: Path) -> bool:
+    """Convert .pdf to .docx using Microsoft Word via AppleScript (headless).
+
+    Word opens the PDF (which triggers its built-in PDF-to-DOCX converter),
+    then saves as .docx. No dialogs, no user interaction.
+    Returns True on success, False if Word is unavailable.
+    """
+    pdf_abs = str(pdf_path.resolve())
+    docx_abs = str(docx_path.resolve())
+
+    script = f'''
+    tell application "Microsoft Word"
+        open POSIX file "{pdf_abs}" as alias
+        delay 2
+        set theDoc to active document
+        set outputPath to POSIX file "{docx_abs}" as text
+        save as theDoc file name outputPath file format format document
+        close theDoc saving no
+    end tell
+    '''
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=90,
+        )
+        if result.returncode != 0:
+            logger.warning(f"Word PDF→DOCX failed (rc={result.returncode}): {result.stderr.strip()}")
+            return False
+        if not docx_path.exists():
+            logger.warning("Word PDF→DOCX succeeded but DOCX file not found")
+            return False
+        logger.info(f"Word converted PDF to DOCX: {docx_path.name}")
+        return True
+    except subprocess.TimeoutExpired:
+        logger.warning("Word PDF→DOCX timed out after 90s")
+        return False
+    except FileNotFoundError:
+        logger.warning("osascript not found — not on macOS?")
+        return False
+
+
 def _word_to_pdf_headless(docx_path: Path, pdf_path: Path) -> bool:
     """Convert .docx to PDF using Microsoft Word via AppleScript (headless).
 

@@ -580,16 +580,99 @@ def compare_pdfs(
 ):
     """Compare two PDFs and produce a diff report as PDF.
 
+    Primary path (Word available):
+      1. Convert both PDFs to DOCX via Word headless
+      2. Run OOXML comparison engine (same as .docx pipeline)
+      3. Render track-changes DOCX back to PDF via Word
+      → Preserves original formatting perfectly.
+
+    Fallback path (no Word):
+      Extract text, diff, render via WeasyPrint (lossy formatting).
+
     Returns summary dict with word counts.
     """
-    from doccompare.rendering.pdf_renderer import render_pdf
-
     old_path = Path(old_path)
     new_path = Path(new_path)
     output_pdf = Path(output_pdf)
 
     original_name = original_name or old_path.name
     modified_name = modified_name or new_path.name
+
+    # Try the Word-based pipeline first (best formatting)
+    summary = _compare_pdfs_via_word(
+        old_path, new_path, output_pdf, original_name, modified_name,
+    )
+    if summary is not None:
+        return summary
+
+    # Fallback: text extraction + WeasyPrint
+    logger.warning("Word not available — falling back to text-based PDF comparison")
+    return _compare_pdfs_text_based(
+        old_path, new_path, output_pdf, original_name, modified_name,
+    )
+
+
+def _compare_pdfs_via_word(
+    old_path: Path,
+    new_path: Path,
+    output_pdf: Path,
+    original_name: str,
+    modified_name: str,
+) -> dict | None:
+    """Compare PDFs by converting to DOCX via Word, then using OOXML engine.
+
+    Returns summary dict on success, None if Word is unavailable.
+    """
+    from doccompare.rendering.pdf_pipeline import (
+        _word_temp_dir, _pdf_to_docx_headless, produce_pdf,
+    )
+    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+
+    word_dir = _word_temp_dir()
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    old_docx = word_dir / f".doccompare_old_{ts}.docx"
+    new_docx = word_dir / f".doccompare_new_{ts}.docx"
+
+    try:
+        # Step 1: Convert both PDFs to DOCX via Word
+        logger.info(f"Converting {old_path.name} to DOCX via Word")
+        if not _pdf_to_docx_headless(old_path, old_docx):
+            return None
+
+        logger.info(f"Converting {new_path.name} to DOCX via Word")
+        if not _pdf_to_docx_headless(new_path, new_docx):
+            return None
+
+        # Step 2: Run OOXML comparison (same engine as .docx files)
+        logger.info("Running OOXML comparison on converted documents")
+        doc_tree, summary = ooxml_compare(old_docx, new_docx, None)
+
+        # Step 3: Render to PDF via Word (same pipeline as .docx)
+        logger.info("Rendering PDF via Word")
+        produce_pdf(
+            doc_tree, output_pdf, summary,
+            original_name=original_name,
+            modified_name=modified_name,
+            docx_path=new_docx,
+        )
+
+        logger.info(f"PDF comparison report saved: {output_pdf}")
+        return summary
+
+    finally:
+        old_docx.unlink(missing_ok=True)
+        new_docx.unlink(missing_ok=True)
+
+
+def _compare_pdfs_text_based(
+    old_path: Path,
+    new_path: Path,
+    output_pdf: Path,
+    original_name: str,
+    modified_name: str,
+) -> dict:
+    """Fallback: compare PDFs via text extraction + WeasyPrint rendering."""
+    from doccompare.rendering.pdf_renderer import render_pdf
 
     logger.info(f"Extracting text from {old_path.name}")
     old_paras = _extract_paragraphs(old_path)
