@@ -118,7 +118,7 @@ class DocCompareApp:
             ratio = target_h / img.height
             img = img.resize((int(img.width * ratio), target_h), Image.LANCZOS)
             self._logo_img = ImageTk.PhotoImage(img)
-            tk.Label(header, image=self._logo_img, bg=BG).pack(anchor="w", padx=(15, 0))
+            tk.Label(header, image=self._logo_img, bg=BG).pack(anchor="w", padx=(3, 0))
         except Exception:
             logo_frame = tk.Frame(header, bg=BG)
             logo_frame.pack(anchor="w", padx=(15, 0))
