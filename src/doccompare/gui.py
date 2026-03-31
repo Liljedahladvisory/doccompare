@@ -14,7 +14,7 @@ import ssl
 
 # ── Config ──────────────────────────────────────────────────────────────────
 CONFIG_PATH = os.path.expanduser("~/.doccompare_llt.json")
-WEBHOOK_URL = "https://script.google.com/macros/s/DITT_ID/exec"  # TODO: replace with real GAS URL
+WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzevrhw7cJdjHZLn_OCfSR7RVSaU2hgV8RKU3hzeSkGouKYa-0ioo85eYoWkiAkHVpB/exec"
 VERIFICATION_TIMEOUT = 600  # 10 min
 
 
