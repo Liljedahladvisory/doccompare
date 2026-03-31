@@ -5,33 +5,65 @@ import threading
 from pathlib import Path
 from datetime import datetime
 import sys
+import os
+import json
 
-# ── Color palette ────────────────────────────────────────────────────────
-BG = "#111114"
-SURFACE = "#1a1a1f"
-CARD = "#222228"
-FIELD = "#2a2a32"
-FIELD_HOVER = "#32323c"
-BORDER = "#333340"
-FG = "#f0f0f5"
-FG_DIM = "#a0a0b0"
-SUBTITLE = "#78788a"
-ACCENT = "#e8692a"          # Warm orange
-ACCENT_HOVER = "#f07a3a"
-ACCENT_MUTED = "#3a2518"    # Very dark orange for subtle backgrounds
-SUCCESS = "#34c759"
-ERROR = "#ff453a"
-BTN_FG = "#ffffff"
-DISABLED_BG = "#2a2a32"
-DISABLED_FG = "#555566"
-FONT = "SF Pro Display" if sys.platform == "darwin" else "Segoe UI"
-FONT_MONO = "SF Mono" if sys.platform == "darwin" else "Consolas"
+# ── Config ──────────────────────────────────────────────────────────────────
+CONFIG_PATH = os.path.expanduser("~/.doccompare_llt.json")
 
-# ── Icon characters (SF Symbols fallback) ────────────────────────────────
-ICON_DOC = "\U0001F4C4"      # 📄
-ICON_SAVE = "\U0001F4BE"     # 💾
-ICON_CHECK = "\u2713"        # ✓
-ICON_ARROW = "\u276F"        # ❯
+
+def load_config() -> dict:
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_config(cfg: dict):
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+# ── Colour palette (Meeting Recorder LLT warm dark theme) ──────────────────
+BG      = "#0E0D0C"
+BG2     = "#161412"
+BG3     = "#1E1B18"
+BG4     = "#272320"
+BORDER  = "#332E28"
+BORDER2 = "#4A4238"
+FG      = "#F2EEE8"       # primary text — warm white
+FG2     = "#C8B89A"       # secondary text
+FG3     = "#E0D4C0"       # emphasized text
+FG_DIM  = "#9A8A72"       # tertiary — hints
+ACCENT  = "#E07820"       # orange brand accent
+ACCENT2 = "#C05E0A"       # darker orange for hover/active
+RED     = "#D95050"
+GREEN   = "#4AB870"
+
+# ── Fonts ───────────────────────────────────────────────────────────────────
+FONT_LOGO1   = ("Helvetica Neue", 14, "bold")
+FONT_LOGO2   = ("Helvetica Neue", 14)
+FONT_POWERED = ("Helvetica Neue", 9, "italic")
+FONT_SECTION = ("Helvetica Neue", 8, "bold")
+FONT_H       = ("Helvetica Neue", 11, "bold")
+FONT_B       = ("Helvetica Neue", 11)
+FONT_S       = ("Helvetica Neue", 10)
+FONT_XS      = ("Helvetica Neue", 9)
+FONT_M       = ("Menlo", 10)
+FONT_MS      = ("Menlo", 9)
+FONT_TITLE   = ("Helvetica Neue", 26, "bold")
+FONT_SUB     = ("Helvetica Neue", 12)
+FONT_BTN     = ("Helvetica Neue", 14, "bold")
+FONT_GEAR    = ("Helvetica Neue", 18)
+
+# ── Icon characters ─────────────────────────────────────────────────────────
+ICON_CHECK = "\u2713"     # ✓
 
 
 def _style_widgets():
@@ -39,7 +71,7 @@ def _style_widgets():
     style.theme_use("default")
     style.configure(
         "Orange.Horizontal.TProgressbar",
-        troughcolor=FIELD,
+        troughcolor=BG3,
         background=ACCENT,
         bordercolor=BG,
         lightcolor=ACCENT,
@@ -47,48 +79,117 @@ def _style_widgets():
     )
 
 
-class RoundedFrame(tk.Canvas):
-    """A canvas that draws a rounded-rectangle background to simulate cards."""
+class RoundedButton(tk.Canvas):
+    """Canvas-based button with smooth rounded corners and full colour control."""
 
-    def __init__(self, parent, bg_color=CARD, corner=12, border_color=BORDER, **kw):
-        super().__init__(parent, highlightthickness=0, bg=parent["bg"], **kw)
-        self._bg_color = bg_color
-        self._border_color = border_color
-        self._corner = corner
-        self._inner = tk.Frame(self, bg=bg_color)
-        self._inner_id = self.create_window(0, 0, anchor="nw", window=self._inner)
-        self.bind("<Configure>", self._redraw)
+    def __init__(self, parent, text, command=None, style="solid",
+                 bg=None, fg="#FFFFFF", radius=12,
+                 font_spec=None, padx=28, pady=12,
+                 state="normal", fixed_width=None):
+        import tkinter.font as tkfont
 
-    def _redraw(self, event=None):
-        self.delete("bg")
-        w, h, r = self.winfo_width(), self.winfo_height(), self._corner
-        # Border rectangle
-        self._rounded_rect(1, 1, w - 1, h - 1, r, self._border_color, "bg")
-        # Fill rectangle
-        self._rounded_rect(2, 2, w - 2, h - 2, r - 1, self._bg_color, "bg")
-        self.tag_lower("bg")
-        self.itemconfigure(self._inner_id, width=w - 8, height=h - 8)
-        self.coords(self._inner_id, 4, 4)
+        self._style    = style
+        self._bg       = bg or ACCENT
+        self._fg       = fg
+        self._radius   = radius
+        self._padx     = padx
+        self._pady     = pady
+        self._command  = command
+        self._enabled  = (state == "normal")
+        self._text     = text
+        self._hovering = False
+        self._fspec    = font_spec or ("Helvetica Neue", 13)
 
-    def _rounded_rect(self, x1, y1, x2, y2, r, color, tag):
-        self.create_arc(x1, y1, x1 + 2 * r, y1 + 2 * r, start=90, extent=90, fill=color, outline=color, tags=tag)
-        self.create_arc(x2 - 2 * r, y1, x2, y1 + 2 * r, start=0, extent=90, fill=color, outline=color, tags=tag)
-        self.create_arc(x1, y2 - 2 * r, x1 + 2 * r, y2, start=180, extent=90, fill=color, outline=color, tags=tag)
-        self.create_arc(x2 - 2 * r, y2 - 2 * r, x2, y2, start=270, extent=90, fill=color, outline=color, tags=tag)
-        self.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color, outline=color, tags=tag)
-        self.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color, outline=color, tags=tag)
+        weight = "bold" if len(self._fspec) > 2 and "bold" in self._fspec[2] else "normal"
+        mf = tkfont.Font(family=self._fspec[0], size=self._fspec[1], weight=weight)
+        th = mf.metrics("linespace")
+        tw = mf.measure(text)
+        self._btn_w = fixed_width or (tw + 2 * padx)
+        self._btn_h = th + 2 * pady
 
-    @property
-    def inner(self):
-        return self._inner
+        super().__init__(parent, width=self._btn_w, height=self._btn_h,
+                         bg=parent.cget("bg"), highlightthickness=0, bd=0)
+        self._draw()
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>",    self._on_enter)
+        self.bind("<Leave>",    self._on_leave)
+
+    def _resolve_fill(self):
+        if not self._enabled:
+            return (BG3, FG_DIM) if self._style == "solid" else (BG, BORDER)
+        if self._hovering:
+            if self._style == "solid":
+                c = self._bg.lstrip("#")
+                r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+                darker = f"#{int(r*.82):02x}{int(g*.82):02x}{int(b*.82):02x}"
+                return darker, self._fg
+            else:
+                return BG2, self._fg
+        if self._style == "solid":
+            return self._bg, self._fg
+        return BG, self._fg
+
+    def _draw(self):
+        self.delete("all")
+        w, h, r = self._btn_w, self._btn_h, self._radius
+        fill, fg = self._resolve_fill()
+        outline = fg if self._style == "ghost" else fill
+
+        m = 1
+        x0, y0, x1, y1 = m, m, w - m, h - m
+        pts = [x0+r, y0, x1-r, y0, x1, y0, x1, y0+r,
+               x1, y1-r, x1, y1, x1-r, y1, x0+r, y1,
+               x0, y1, x0, y1-r, x0, y0+r, x0, y0]
+        self.create_polygon(pts, smooth=True,
+                            fill=fill, outline=outline, width=1)
+        self.create_text(w // 2, h // 2, text=self._text,
+                         font=self._fspec, fill=fg, anchor="center")
+
+    def config(self, **kw):
+        changed = False
+        if "text" in kw:
+            self._text = kw.pop("text"); changed = True
+        if "state" in kw:
+            self._enabled = (kw.pop("state") == "normal"); changed = True
+        if "bg" in kw:
+            self._bg = kw.pop("bg"); changed = True
+        if "fg" in kw:
+            self._fg = kw.pop("fg"); changed = True
+        if "cursor" in kw:
+            super().config(cursor=kw.pop("cursor"))
+        if kw:
+            super().config(**kw)
+        if changed:
+            self._draw()
+
+    def cget(self, key):
+        if key == "state":  return "normal" if self._enabled else "disabled"
+        if key == "text":   return self._text
+        if key == "bg":     return self._bg
+        return super().cget(key)
+
+    def _on_click(self, _=None):
+        if self._enabled and self._command:
+            self._command()
+
+    def _on_enter(self, _=None):
+        self._hovering = True; self._draw()
+
+    def _on_leave(self, _=None):
+        self._hovering = False; self._draw()
 
 
 class DocCompareApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("DocCompare")
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
         self.root.configure(bg=BG)
+        self.root.geometry("600x700")
+        self.root.minsize(540, 620)
+
+        self._config = load_config()
+        self.user_name = self._config.get("user_name", "")
 
         self.original_path: Path | None = None
         self.modified_path: Path | None = None
@@ -98,40 +199,60 @@ class DocCompareApp:
         self._build_ui()
         self._center_window()
 
+        if not self.user_name:
+            self.root.after(300, self._show_setup_dialog)
+
     # ── UI Construction ──────────────────────────────────────────────────
 
     def _build_ui(self):
         root = self.root
         outer = tk.Frame(root, bg=BG)
-        outer.pack(padx=32, pady=(24, 24), fill="both")
+        outer.pack(padx=32, pady=(24, 24), fill="both", expand=True)
 
         # ── Header area ──────────────────────────────────────────────────
         header = tk.Frame(outer, bg=BG)
-        header.pack(fill="x", pady=(0, 20))
+        header.pack(fill="x", pady=(0, 16))
 
-        # Logo — crop transparent padding from the PNG so it aligns flush
+        left = tk.Frame(header, bg=BG)
+        left.pack(side="left", fill="y")
+
+        # Logo row
+        name_row = tk.Frame(left, bg=BG)
+        name_row.pack(anchor="w")
+
+        # Try to load logo image, fall back to text
         logo_path = Path(__file__).parent / "assets" / "logo.png"
         try:
             from PIL import Image, ImageTk
             img = Image.open(logo_path).convert("RGBA")
-            bbox = img.getbbox()  # crop to visible pixels
+            bbox = img.getbbox()
             if bbox:
                 img = img.crop(bbox)
-            target_h = 32
+            target_h = 28
             ratio = target_h / img.height
             img = img.resize((int(img.width * ratio), target_h), Image.LANCZOS)
             self._logo_img = ImageTk.PhotoImage(img)
-            tk.Label(header, image=self._logo_img, bg=BG).pack(anchor="w")
+            tk.Label(name_row, image=self._logo_img, bg=BG).pack(side="left")
         except Exception:
-            logo_frame = tk.Frame(header, bg=BG)
-            logo_frame.pack(anchor="w")
-            tk.Label(logo_frame, text="Liljedahl", font=(FONT, 15), bg=BG, fg="#707080").pack(side="left")
-            tk.Label(logo_frame, text=" Advisory", font=(FONT, 15, "bold"), bg=BG, fg="#50505e").pack(side="left")
+            self._logo_name_lbl = tk.Label(
+                name_row, text=self._display_name(),
+                font=FONT_LOGO1, bg=BG, fg=FG,
+            )
+            self._logo_name_lbl.pack(side="left")
 
-        tk.Label(
-            header, text="Liljedahl Legal Tech Tools",
-            font=(FONT_MONO, 9, "italic"), bg=BG, fg=SUBTITLE, anchor="w",
-        ).pack(anchor="w", pady=(3, 0))
+        tk.Label(left, text="Powered by Liljedahl Legal Tech",
+                 font=FONT_POWERED, bg=BG, fg=FG_DIM).pack(anchor="w", pady=(3, 0))
+
+        # Gear icon (settings) — right side of header
+        right = tk.Frame(header, bg=BG)
+        right.pack(side="right", fill="y")
+
+        gear = tk.Label(right, text="\u2699", font=FONT_GEAR,
+                        bg=BG, fg=FG_DIM, cursor="hand2")
+        gear.pack(side="right")
+        gear.bind("<Enter>",    lambda _: gear.config(fg=FG))
+        gear.bind("<Leave>",    lambda _: gear.config(fg=FG_DIM))
+        gear.bind("<Button-1>", lambda _: self._show_settings_dialog())
 
         # ── Title block ──────────────────────────────────────────────────
         title_frame = tk.Frame(outer, bg=BG)
@@ -139,51 +260,51 @@ class DocCompareApp:
 
         tk.Label(
             title_frame, text="DocCompare",
-            font=(FONT, 26, "bold"), bg=BG, fg=FG,
+            font=FONT_TITLE, bg=BG, fg=FG,
         ).pack(side="left")
 
         # Version badge
-        badge = tk.Label(
-            title_frame, text="v0.1",
-            font=(FONT_MONO, 9), bg=ACCENT_MUTED, fg=ACCENT,
-            padx=8, pady=2,
-        )
-        badge.pack(side="left", padx=(12, 0), pady=(8, 0))
+        badge_frame = tk.Frame(title_frame, bg=BG3, padx=8, pady=2,
+                               highlightbackground=BORDER, highlightthickness=1)
+        badge_frame.pack(side="left", padx=(12, 0), pady=(8, 0))
+        tk.Label(badge_frame, text="v0.1", font=FONT_MS, bg=BG3,
+                 fg=ACCENT).pack()
 
         tk.Label(
-            outer, text="Compare .docx documents and generate a diff report",
-            font=(FONT, 12), bg=BG, fg=SUBTITLE,
-        ).pack(anchor="w", pady=(0, 20))
+            outer, text="Jämför .docx-dokument och generera en diff-rapport",
+            font=FONT_SUB, bg=BG, fg=FG_DIM,
+        ).pack(anchor="w", pady=(0, 16))
 
         # ── Thin accent line ─────────────────────────────────────────────
-        tk.Frame(outer, bg=ACCENT, height=2).pack(fill="x", pady=(0, 20))
+        tk.Frame(outer, bg=ACCENT, height=2).pack(fill="x", pady=(0, 16))
 
         # ── File picker cards ────────────────────────────────────────────
         self.orig_card, self.orig_label, self.orig_icon = self._file_card(
-            outer, "Original document", "Select file", self._pick_original,
+            outer, "Originaldokument", "Välj fil", self._pick_original,
         )
         self.mod_card, self.mod_label, self.mod_icon = self._file_card(
-            outer, "Modified document", "Select file", self._pick_modified,
+            outer, "Ändrat dokument", "Välj fil", self._pick_modified,
         )
         self.out_card, self.out_label, self.out_icon = self._file_card(
-            outer, "Save report as", "Choose location", self._pick_output,
-            default_text="Desktop — automatic filename",
+            outer, "Spara rapport som", "Välj plats", self._pick_output,
+            default_text="Skrivbordet — automatiskt filnamn",
             optional=True,
         )
 
         # ── Compare button ───────────────────────────────────────────────
-        self.compare_btn = tk.Button(
-            outer, text="Compare Documents",
+        btn_frame = tk.Frame(outer, bg=BG)
+        btn_frame.pack(fill="x", pady=(8, 16))
+
+        self.compare_btn = RoundedButton(
+            btn_frame, text="Jämför dokument",
             command=self._run_comparison,
-            bg=ACCENT, fg=BTN_FG,
-            activebackground=ACCENT_HOVER, activeforeground=BTN_FG,
-            font=(FONT, 14, "bold"),
-            relief="flat", cursor="hand2", state="disabled",
-            disabledforeground=DISABLED_FG,
-            borderwidth=0, highlightthickness=0,
+            bg=ACCENT, fg="#FFFFFF",
+            font_spec=FONT_BTN,
+            padx=40, pady=14, radius=12,
+            state="disabled",
+            fixed_width=536,
         )
-        self.compare_btn.pack(fill="x", ipady=13, pady=(8, 16))
-        self._style_button_disabled()
+        self.compare_btn.pack(fill="x")
 
         # ── Progress bar ─────────────────────────────────────────────────
         self.progress = ttk.Progressbar(
@@ -195,74 +316,79 @@ class DocCompareApp:
         # ── Status label ─────────────────────────────────────────────────
         self.status_label = tk.Label(
             outer, text="",
-            font=(FONT, 11), bg=BG, fg=SUBTITLE,
-            wraplength=460, justify="left", anchor="w",
+            font=FONT_B, bg=BG, fg=FG_DIM,
+            wraplength=500, justify="left", anchor="w",
         )
         self.status_label.pack(anchor="w", fill="x", pady=(6, 0))
 
         # ── Footer ───────────────────────────────────────────────────────
+        footer = tk.Frame(outer, bg=BG)
+        footer.pack(side="bottom", fill="x", pady=(16, 0))
         tk.Label(
-            outer,
+            footer,
             text="Liljedahl Legal Tech  \u2022  Liljedahl Advisory AB",
-            font=(FONT, 9), bg=BG, fg="#44444e",
-        ).pack(side="bottom", pady=(16, 0))
+            font=FONT_XS, bg=BG, fg=BORDER2,
+        ).pack()
 
     def _file_card(
         self, parent, title: str, btn_text: str, command,
-        default_text="No file selected", optional=False,
+        default_text="Ingen fil vald", optional=False,
     ):
         """Create a card-style file picker row."""
-        card = tk.Frame(parent, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
-        card.pack(fill="x", pady=(0, 10), ipady=0)
+        card = tk.Frame(parent, bg=BG2,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill="x", pady=(0, 10))
 
-        inner = tk.Frame(card, bg=CARD)
+        inner = tk.Frame(card, bg=BG2)
         inner.pack(fill="x", padx=14, pady=12)
 
-        # Left side: icon + labels
-        left = tk.Frame(inner, bg=CARD)
+        # Left side: labels
+        left = tk.Frame(inner, bg=BG2)
         left.pack(side="left", fill="x", expand=True)
 
-        top_row = tk.Frame(left, bg=CARD)
+        top_row = tk.Frame(left, bg=BG2)
         top_row.pack(anchor="w")
 
-        title_lbl = tk.Label(
+        tk.Label(
             top_row, text=title,
-            font=(FONT, 11, "bold"), bg=CARD, fg=FG,
-        )
-        title_lbl.pack(side="left")
+            font=FONT_H, bg=BG2, fg=FG,
+        ).pack(side="left")
 
         if optional:
             tk.Label(
-                top_row, text="optional",
-                font=(FONT, 9), bg=CARD, fg=SUBTITLE,
+                top_row, text="valfritt",
+                font=FONT_XS, bg=BG2, fg=FG_DIM,
             ).pack(side="left", padx=(8, 0))
 
         file_lbl = tk.Label(
             left, text=default_text,
-            font=(FONT, 10), bg=CARD, fg=SUBTITLE,
+            font=FONT_S, bg=BG2, fg=FG_DIM,
             anchor="w",
         )
         file_lbl.pack(anchor="w", pady=(3, 0))
 
         # Right side: button
-        btn = tk.Button(
+        btn = RoundedButton(
             inner, text=btn_text, command=command,
-            bg=FIELD, fg=FG_DIM,
-            activebackground=FIELD_HOVER, activeforeground=FG,
-            font=(FONT, 10),
-            relief="flat", cursor="hand2",
-            padx=16, borderwidth=0, highlightthickness=0,
+            style="ghost", bg=BG2, fg=FG2,
+            font_spec=FONT_S, padx=16, pady=8, radius=8,
         )
-        btn.pack(side="right", ipady=6, padx=(12, 0))
+        btn.pack(side="right", padx=(12, 0))
 
-        # Status icon (right of label, hidden initially)
+        # Status icon
         icon_lbl = tk.Label(
             inner, text="",
-            font=(FONT, 13), bg=CARD, fg=SUCCESS,
+            font=("Helvetica Neue", 13), bg=BG2, fg=GREEN,
         )
         icon_lbl.pack(side="right", padx=(0, 4))
 
         return card, file_lbl, icon_lbl
+
+    def _display_name(self) -> str:
+        if self.user_name:
+            parts = self.user_name.strip().split()
+            return parts[0] if parts else "DocCompare"
+        return "DocCompare"
 
     # ── Window centering ─────────────────────────────────────────────────
 
@@ -274,42 +400,124 @@ class DocCompareApp:
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2 - 60}")
 
+    # ── User registration / settings dialogs ─────────────────────────────
+
+    def _show_setup_dialog(self):
+        self._open_name_dialog(
+            title="Välkommen till DocCompare",
+            message="Ange ditt namn eller företagsnamn.\nDet används i rapporter och exporterade filer.",
+            is_first_run=True,
+        )
+
+    def _show_settings_dialog(self):
+        self._open_name_dialog(
+            title="Inställningar",
+            message="Ändra namn eller företagsnamn:",
+            is_first_run=False,
+        )
+
+    def _open_name_dialog(self, title: str, message: str, is_first_run: bool):
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        self.root.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width()  - 440) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 240) // 2
+        dlg.geometry(f"440x240+{x}+{y}")
+
+        pad = tk.Frame(dlg, bg=BG, padx=36, pady=32)
+        pad.pack(fill="both", expand=True)
+
+        tk.Label(pad, text=title, font=("Helvetica Neue", 13, "bold"),
+                 bg=BG, fg=FG).pack(anchor="w")
+        tk.Label(pad, text=message, font=FONT_S, bg=BG, fg=FG2,
+                 wraplength=368, justify="left").pack(anchor="w", pady=(8, 18))
+
+        entry_var = tk.StringVar(value=self.user_name)
+        entry = tk.Entry(pad, textvariable=entry_var, font=FONT_M,
+                         bg=BG3, fg=FG, insertbackground=FG, relief="flat", bd=0,
+                         highlightthickness=1, highlightbackground=BORDER2,
+                         highlightcolor=ACCENT)
+        entry.pack(fill="x", ipady=9)
+        entry.focus_set()
+        entry.select_range(0, "end")
+
+        btn_row = tk.Frame(pad, bg=BG)
+        btn_row.pack(fill="x", pady=(18, 0))
+
+        def save():
+            name = entry_var.get().strip()
+            if not name:
+                entry.config(highlightbackground=RED)
+                return
+            self.user_name = name
+            self._config["user_name"] = name
+            save_config(self._config)
+            # Update logo name label if it exists (text fallback mode)
+            if hasattr(self, "_logo_name_lbl"):
+                self._logo_name_lbl.config(text=self._display_name())
+            dlg.destroy()
+
+        save_lbl = tk.Label(btn_row, text="Spara", font=FONT_B,
+                            bg=ACCENT, fg="#FFFFFF", padx=24, pady=8,
+                            cursor="hand2")
+        save_lbl.pack(side="right")
+        save_lbl.bind("<Button-1>", lambda _: save())
+        save_lbl.bind("<Enter>",  lambda _: save_lbl.config(bg=ACCENT2))
+        save_lbl.bind("<Leave>",  lambda _: save_lbl.config(bg=ACCENT))
+
+        if not is_first_run:
+            cancel_lbl = tk.Label(btn_row, text="Avbryt", font=FONT_B,
+                                  bg=BG3, fg=FG2, padx=24, pady=8,
+                                  cursor="hand2")
+            cancel_lbl.pack(side="right", padx=(0, 8))
+            cancel_lbl.bind("<Button-1>", lambda _: dlg.destroy())
+            cancel_lbl.bind("<Enter>", lambda _: cancel_lbl.config(bg=BG4, fg=FG))
+            cancel_lbl.bind("<Leave>", lambda _: cancel_lbl.config(bg=BG3, fg=FG2))
+
+        entry.bind("<Return>", lambda _: save())
+        dlg.protocol("WM_DELETE_WINDOW", save if is_first_run else dlg.destroy)
+        dlg.wait_window()
+
     # ── File pickers ─────────────────────────────────────────────────────
 
     def _pick_original(self):
         path = filedialog.askopenfilename(
-            title="Select original document",
-            filetypes=[("Word Documents", "*.docx")],
+            title="Välj originaldokument",
+            filetypes=[("Word-dokument", "*.docx")],
         )
         if path:
             self.original_path = Path(path)
-            self.orig_label.config(text=self.original_path.name, fg=FG)
+            self.orig_label.config(text=self.original_path.name, fg=FG3)
             self.orig_icon.config(text=ICON_CHECK)
             self.orig_card.config(highlightbackground=ACCENT)
             self._update_button_state()
 
     def _pick_modified(self):
         path = filedialog.askopenfilename(
-            title="Select modified document",
-            filetypes=[("Word Documents", "*.docx")],
+            title="Välj ändrat dokument",
+            filetypes=[("Word-dokument", "*.docx")],
         )
         if path:
             self.modified_path = Path(path)
-            self.mod_label.config(text=self.modified_path.name, fg=FG)
+            self.mod_label.config(text=self.modified_path.name, fg=FG3)
             self.mod_icon.config(text=ICON_CHECK)
             self.mod_card.config(highlightbackground=ACCENT)
             self._update_button_state()
 
     def _pick_output(self):
         path = filedialog.asksaveasfilename(
-            title="Save report",
+            title="Spara rapport",
             defaultextension=".pdf",
             filetypes=[("PDF", "*.pdf")],
             initialdir=Path.home() / "Desktop",
         )
         if path:
             self.output_path = Path(path)
-            self.out_label.config(text=self.output_path.name, fg=FG)
+            self.out_label.config(text=self.output_path.name, fg=FG3)
             self.out_icon.config(text=ICON_CHECK)
             self.out_card.config(highlightbackground=ACCENT)
 
@@ -317,42 +525,35 @@ class DocCompareApp:
 
     def _update_button_state(self):
         if self.original_path and self.modified_path:
-            # Check format match
             ext1 = self.original_path.suffix.lower()
             ext2 = self.modified_path.suffix.lower()
             if ext1 != ext2:
                 self.status_label.config(
-                    text=f"Both files must be the same format ({ext1} \u2260 {ext2})",
-                    fg=ERROR,
+                    text=f"Båda filerna måste vara samma format ({ext1} \u2260 {ext2})",
+                    fg=RED,
                 )
-                self._style_button_disabled()
+                self.compare_btn.config(state="disabled")
                 return
             if ext1 not in (".docx",):
                 self.status_label.config(
-                    text=f"Unsupported format: {ext1}",
-                    fg=ERROR,
+                    text=f"Format stöds ej: {ext1}",
+                    fg=RED,
                 )
-                self._style_button_disabled()
+                self.compare_btn.config(state="disabled")
                 return
-            self.status_label.config(text="", fg=SUBTITLE)
-            self.compare_btn.config(
-                state="normal", bg=ACCENT,
-                disabledforeground=DISABLED_FG,
-            )
+            self.status_label.config(text="", fg=FG_DIM)
+            self.compare_btn.config(state="normal")
         else:
-            self._style_button_disabled()
-
-    def _style_button_disabled(self):
-        self.compare_btn.config(state="disabled", bg=DISABLED_BG)
+            self.compare_btn.config(state="disabled")
 
     def _default_output(self) -> Path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Path.home() / "Desktop" / f"comparison_{ts}.pdf"
+        return Path.home() / "Desktop" / f"jämförelse_{ts}.pdf"
 
     # ── Comparison logic ─────────────────────────────────────────────────
 
     def _run_comparison(self):
-        self.compare_btn.config(state="disabled", bg=DISABLED_BG)
+        self.compare_btn.config(state="disabled")
         self.progress.start(12)
         output = self.output_path or self._default_output()
 
@@ -361,17 +562,15 @@ class DocCompareApp:
 
         def worker():
             try:
-                ext = self.original_path.suffix.lower()
-
                 from doccompare.comparison.ooxml_engine import compare as ooxml_compare
                 from doccompare.rendering.pdf_pipeline import produce_pdf
 
-                set_status("Comparing documents\u2026")
+                set_status("Jämför dokument\u2026")
                 doc_tree, summary = ooxml_compare(
                     self.original_path, self.modified_path, None,
                 )
 
-                set_status("Rendering PDF\u2026")
+                set_status("Renderar PDF\u2026")
                 produce_pdf(
                     doc_tree, output, summary,
                     original_name=self.original_path.name,
@@ -381,10 +580,10 @@ class DocCompareApp:
 
                 s = summary
                 msg = (
-                    f"Done! Report saved: {output.name}\n"
-                    f"+{s.get('added_words', 0)} added  "
-                    f"\u2212{s.get('deleted_words', 0)} deleted  "
-                    f"{s.get('unchanged_words', 0)} unchanged"
+                    f"Klart! Rapport sparad: {output.name}\n"
+                    f"+{s.get('added_words', 0)} tillagda  "
+                    f"\u2212{s.get('deleted_words', 0)} borttagna  "
+                    f"{s.get('unchanged_words', 0)} oförändrade"
                 )
                 self.root.after(0, lambda: self._on_success(msg, output))
 
@@ -395,20 +594,20 @@ class DocCompareApp:
 
     def _on_success(self, msg: str, output: Path):
         self.progress.stop()
-        self.status_label.config(text=msg, fg=SUCCESS)
-        self.compare_btn.config(state="normal", bg=ACCENT)
+        self.status_label.config(text=msg, fg=GREEN)
+        self.compare_btn.config(state="normal")
         import subprocess
         subprocess.run(["open", str(output)])
 
     def _on_error(self, error: str):
         self.progress.stop()
-        self.status_label.config(text=f"Error: {error}", fg=ERROR)
-        self.compare_btn.config(state="normal", bg=ACCENT)
+        self.status_label.config(text=f"Fel: {error}", fg=RED)
+        self.compare_btn.config(state="normal")
 
 
 def main():
     root = tk.Tk()
-    root.minsize(520, 520)
+    root.minsize(540, 620)
     DocCompareApp(root)
     root.mainloop()
 
