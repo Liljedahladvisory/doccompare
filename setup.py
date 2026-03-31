@@ -52,7 +52,7 @@ OPTIONS = {
         'setuptools',
         'pip',
     ],
-    'iconfile': None,  # Set to 'DocCompare.icns' if you have an icon
+    'iconfile': 'DocCompare.icns',
     'plist': {
         'CFBundleName': 'DocCompare',
         'CFBundleDisplayName': 'DocCompare',
