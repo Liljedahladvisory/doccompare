@@ -19,6 +19,8 @@ DMG_NAME="${APP_NAME}-${VERSION}"
 BUILD_DIR="$(pwd)/build"
 DIST_DIR="$(pwd)/dist"
 
+PYTHON="python3.12"
+
 echo "═══════════════════════════════════════════════════"
 echo "  Building ${APP_NAME} v${VERSION}"
 echo "═══════════════════════════════════════════════════"
@@ -26,6 +28,13 @@ echo "════════════════════════�
 # ── Step 0: Check prerequisites ──────────────────────────────────────────────
 echo ""
 echo "▸ Checking prerequisites..."
+
+# Check Python 3.12
+if ! command -v "$PYTHON" &>/dev/null; then
+    echo "  ✗ Python 3.12 not found. Run: brew install python@3.12"
+    exit 1
+fi
+echo "  ✓ Python 3.12 OK"
 
 # Check Homebrew dependencies for WeasyPrint
 for dep in pango cairo gdk-pixbuf; do
@@ -37,25 +46,15 @@ for dep in pango cairo gdk-pixbuf; do
 done
 echo "  ✓ Homebrew dependencies OK"
 
-# Check py2app
-if ! python3 -c "import py2app" 2>/dev/null; then
-    echo "  ✗ py2app not installed. Run: pip install py2app"
-    exit 1
-fi
-echo "  ✓ py2app OK"
-
-# Check doccompare is importable
-if ! python3 -c "import doccompare" 2>/dev/null; then
-    echo "  ✗ doccompare not installed. Run: pip install -e ."
-    exit 1
-fi
-echo "  ✓ doccompare OK"
-
-# ── Step 1: Clean previous builds ───────────────────────────────────────────
+# ── Step 1: Set up virtual environment ───────────────────────────────────────
 echo ""
-echo "▸ Cleaning previous builds..."
-rm -rf "$BUILD_DIR" "$DIST_DIR"
-echo "  ✓ Clean"
+echo "▸ Setting up build environment..."
+rm -rf "$BUILD_DIR" "$DIST_DIR" .venv_build
+$PYTHON -m venv .venv_build
+source .venv_build/bin/activate
+pip install -q 'setuptools<81' py2app 2>&1 | tail -1
+pip install -q -e . 2>&1 | tail -1
+echo "  ✓ Build environment ready"
 
 # ── Step 2: Build .app bundle with py2app ────────────────────────────────────
 echo ""
