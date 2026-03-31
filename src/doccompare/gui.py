@@ -36,15 +36,91 @@ def save_config(cfg: dict):
         pass
 
 
+# ── Translations ────────────────────────────────────────────────────────────
+
+STRINGS = {
+    "sv": {
+        "subtitle":           "Jämför .docx-dokument och generera en diff-rapport",
+        "original_doc":       "Originaldokument",
+        "modified_doc":        "Ändrat dokument",
+        "save_report":         "Spara rapport som",
+        "select_file":         "Välj fil",
+        "choose_location":     "Välj plats",
+        "no_file":             "Ingen fil vald",
+        "desktop_auto":        "Skrivbordet — automatiskt filnamn",
+        "optional":            "valfritt",
+        "compare_btn":         "Jämför dokument",
+        "comparing":           "Jämför dokument\u2026",
+        "rendering":           "Renderar PDF\u2026",
+        "done":                "Klart! Rapport sparad: {filename}",
+        "added":               "tillagda",
+        "deleted":             "borttagna",
+        "unchanged":           "oförändrade",
+        "error_prefix":        "Fel",
+        "format_mismatch":     "Båda filerna måste vara samma format ({ext1} \u2260 {ext2})",
+        "format_unsupported":  "Format stöds ej: {ext}",
+        "not_verified":        "Programmet är inte aktiverat. Starta om och verifiera din e-post.",
+        "verify_first":        "Verifiera din e-post först.",
+        "settings_title":      "Inställningar",
+        "settings_msg":        "Ändra namn eller företagsnamn:",
+        "save":                "Spara",
+        "cancel":              "Avbryt",
+        "pick_original_title": "Välj originaldokument",
+        "pick_modified_title": "Välj ändrat dokument",
+        "pick_output_title":   "Spara rapport",
+        "word_docs":           "Word-dokument",
+        "language":            "Språk",
+    },
+    "en": {
+        "subtitle":           "Compare .docx documents and generate a diff report",
+        "original_doc":       "Original document",
+        "modified_doc":        "Modified document",
+        "save_report":         "Save report as",
+        "select_file":         "Select file",
+        "choose_location":     "Choose location",
+        "no_file":             "No file selected",
+        "desktop_auto":        "Desktop — automatic filename",
+        "optional":            "optional",
+        "compare_btn":         "Compare Documents",
+        "comparing":           "Comparing documents\u2026",
+        "rendering":           "Rendering PDF\u2026",
+        "done":                "Done! Report saved: {filename}",
+        "added":               "added",
+        "deleted":             "deleted",
+        "unchanged":           "unchanged",
+        "error_prefix":        "Error",
+        "format_mismatch":     "Both files must be the same format ({ext1} \u2260 {ext2})",
+        "format_unsupported":  "Unsupported format: {ext}",
+        "not_verified":        "App not activated. Restart and verify your email.",
+        "verify_first":        "Verify your email first.",
+        "settings_title":      "Settings",
+        "settings_msg":        "Change name or company name:",
+        "save":                "Save",
+        "cancel":              "Cancel",
+        "pick_original_title": "Select original document",
+        "pick_modified_title": "Select modified document",
+        "pick_output_title":   "Save report",
+        "word_docs":           "Word Documents",
+        "language":            "Language",
+    },
+}
+
+
+def _t(key: str, lang: str = "sv", **kw) -> str:
+    """Look up a translated string."""
+    s = STRINGS.get(lang, STRINGS["sv"]).get(key, key)
+    if kw:
+        s = s.format(**kw)
+    return s
+
+
 # ── Email verification ──────────────────────────────────────────────────────
 
 def _generate_code() -> str:
-    """Generate a 4-digit verification code."""
     return str(random.randint(1000, 9999))
 
 
 def _send_verification_code(email: str, name: str, code: str) -> bool:
-    """Send verification code via Google Apps Script webhook. Returns True if OK."""
     payload = {
         "action": "send_verification_email",
         "email": email,
@@ -54,7 +130,6 @@ def _send_verification_code(email: str, name: str, code: str) -> bool:
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
 
-    # Try with normal SSL first
     ctx = ssl.create_default_context()
     try:
         req = urllib.request.Request(WEBHOOK_URL, data=data, headers=headers, method="POST")
@@ -64,7 +139,6 @@ def _send_verification_code(email: str, name: str, code: str) -> bool:
     except Exception:
         pass
 
-    # Fallback without SSL verification (bundled Python may lack certs)
     try:
         ctx_noverify = ssl.create_default_context()
         ctx_noverify.check_hostname = False
@@ -77,19 +151,39 @@ def _send_verification_code(email: str, name: str, code: str) -> bool:
         return False
 
 
-# ── Colour palette (Meeting Recorder LLT warm dark theme) ──────────────────
+def _send_registration(data: dict) -> bool:
+    """Send full registration data to GAS webhook (stored in spreadsheet)."""
+    payload = json.dumps(data).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    for verify in (True, False):
+        try:
+            ctx = ssl.create_default_context()
+            if not verify:
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+            req = urllib.request.Request(WEBHOOK_URL, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                if result.get("status") == "ok":
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+# ── Colour palette ──────────────────────────────────────────────────────────
 BG      = "#0E0D0C"
 BG2     = "#161412"
 BG3     = "#1E1B18"
 BG4     = "#272320"
 BORDER  = "#332E28"
 BORDER2 = "#4A4238"
-FG      = "#F2EEE8"       # primary text — warm white
-FG2     = "#C8B89A"       # secondary text
-FG3     = "#E0D4C0"       # emphasized text
-FG_DIM  = "#9A8A72"       # tertiary — hints
-ACCENT  = "#E07820"       # orange brand accent
-ACCENT2 = "#C05E0A"       # darker orange for hover/active
+FG      = "#F2EEE8"
+FG2     = "#C8B89A"
+FG3     = "#E0D4C0"
+FG_DIM  = "#9A8A72"
+ACCENT  = "#E07820"
+ACCENT2 = "#C05E0A"
 RED     = "#D95050"
 GREEN   = "#4AB870"
 
@@ -109,8 +203,7 @@ FONT_SUB     = ("Helvetica Neue", 12)
 FONT_BTN     = ("Helvetica Neue", 14, "bold")
 FONT_GEAR    = ("Helvetica Neue", 18)
 
-# ── Icon characters ─────────────────────────────────────────────────────────
-ICON_CHECK = "\u2713"     # ✓
+ICON_CHECK = "\u2713"
 
 
 def _style_widgets():
@@ -118,23 +211,19 @@ def _style_widgets():
     style.theme_use("default")
     style.configure(
         "Orange.Horizontal.TProgressbar",
-        troughcolor=BG3,
-        background=ACCENT,
-        bordercolor=BG,
-        lightcolor=ACCENT,
-        darkcolor=ACCENT,
+        troughcolor=BG3, background=ACCENT, bordercolor=BG,
+        lightcolor=ACCENT, darkcolor=ACCENT,
     )
 
 
 class RoundedButton(tk.Canvas):
-    """Canvas-based button with smooth rounded corners and full colour control."""
+    """Canvas-based button with smooth rounded corners."""
 
     def __init__(self, parent, text, command=None, style="solid",
                  bg=None, fg="#FFFFFF", radius=12,
                  font_spec=None, padx=28, pady=12,
                  state="normal", fixed_width=None):
         import tkinter.font as tkfont
-
         self._style    = style
         self._bg       = bg or ACCENT
         self._fg       = fg
@@ -146,14 +235,12 @@ class RoundedButton(tk.Canvas):
         self._text     = text
         self._hovering = False
         self._fspec    = font_spec or ("Helvetica Neue", 13)
-
         weight = "bold" if len(self._fspec) > 2 and "bold" in self._fspec[2] else "normal"
         mf = tkfont.Font(family=self._fspec[0], size=self._fspec[1], weight=weight)
         th = mf.metrics("linespace")
         tw = mf.measure(text)
         self._btn_w = fixed_width or (tw + 2 * padx)
         self._btn_h = th + 2 * pady
-
         super().__init__(parent, width=self._btn_w, height=self._btn_h,
                          bg=parent.cget("bg"), highlightthickness=0, bd=0)
         self._draw()
@@ -168,40 +255,34 @@ class RoundedButton(tk.Canvas):
             if self._style == "solid":
                 c = self._bg.lstrip("#")
                 r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
-                darker = f"#{int(r*.82):02x}{int(g*.82):02x}{int(b*.82):02x}"
-                return darker, self._fg
-            else:
-                return BG2, self._fg
-        if self._style == "solid":
-            return self._bg, self._fg
-        return BG, self._fg
+                return f"#{int(r*.82):02x}{int(g*.82):02x}{int(b*.82):02x}", self._fg
+            return BG2, self._fg
+        return (self._bg, self._fg) if self._style == "solid" else (BG, self._fg)
 
     def _draw(self):
         self.delete("all")
         w, h, r = self._btn_w, self._btn_h, self._radius
         fill, fg = self._resolve_fill()
         outline = fg if self._style == "ghost" else fill
-
         m = 1
         x0, y0, x1, y1 = m, m, w - m, h - m
         pts = [x0+r, y0, x1-r, y0, x1, y0, x1, y0+r,
                x1, y1-r, x1, y1, x1-r, y1, x0+r, y1,
                x0, y1, x0, y1-r, x0, y0+r, x0, y0]
-        self.create_polygon(pts, smooth=True,
-                            fill=fill, outline=outline, width=1)
+        self.create_polygon(pts, smooth=True, fill=fill, outline=outline, width=1)
         self.create_text(w // 2, h // 2, text=self._text,
                          font=self._fspec, fill=fg, anchor="center")
 
     def config(self, **kw):
         changed = False
-        if "text" in kw:
-            self._text = kw.pop("text"); changed = True
-        if "state" in kw:
-            self._enabled = (kw.pop("state") == "normal"); changed = True
-        if "bg" in kw:
-            self._bg = kw.pop("bg"); changed = True
-        if "fg" in kw:
-            self._fg = kw.pop("fg"); changed = True
+        for k in ("text", "state", "bg", "fg"):
+            if k in kw:
+                v = kw.pop(k)
+                if k == "text":    self._text = v
+                elif k == "state": self._enabled = (v == "normal")
+                elif k == "bg":    self._bg = v
+                elif k == "fg":    self._fg = v
+                changed = True
         if "cursor" in kw:
             super().config(cursor=kw.pop("cursor"))
         if kw:
@@ -216,15 +297,14 @@ class RoundedButton(tk.Canvas):
         return super().cget(key)
 
     def _on_click(self, _=None):
-        if self._enabled and self._command:
-            self._command()
-
+        if self._enabled and self._command: self._command()
     def _on_enter(self, _=None):
         self._hovering = True; self._draw()
-
     def _on_leave(self, _=None):
         self._hovering = False; self._draw()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 class DocCompareApp:
     def __init__(self, root: tk.Tk):
@@ -238,6 +318,7 @@ class DocCompareApp:
         self._config = load_config()
         self.user_name = self._config.get("user_name", "")
         self._verified = bool(self._config.get("verified"))
+        self.lang = self._config.get("language", "sv")
 
         self.original_path: Path | None = None
         self.modified_path: Path | None = None
@@ -247,45 +328,50 @@ class DocCompareApp:
         self._build_ui()
         self._center_window()
 
-        # Show registration on first run (not yet verified)
         if not self._verified:
             self.root.after(300, self._show_registration_dialog)
+        elif not self._config.get("language"):
+            # Verified but no language chosen yet — show language picker
+            self.root.after(300, self._show_language_dialog)
+
+    def _s(self, key, **kw):
+        return _t(key, self.lang, **kw)
 
     # ── UI Construction ──────────────────────────────────────────────────
 
     def _build_ui(self):
         root = self.root
-        outer = tk.Frame(root, bg=BG)
-        outer.pack(padx=32, pady=(24, 24), fill="both", expand=True)
+        self._outer = tk.Frame(root, bg=BG)
+        self._outer.pack(padx=32, pady=(24, 24), fill="both", expand=True)
+        self._populate_main_ui()
 
-        # ── Header area ──────────────────────────────────────────────────
+    def _populate_main_ui(self):
+        outer = self._outer
+        # Clear existing children
+        for w in outer.winfo_children():
+            w.destroy()
+
+        # ── Header ───────────────────────────────────────────────────────
         header = tk.Frame(outer, bg=BG)
         header.pack(fill="x", pady=(0, 16))
 
         left = tk.Frame(header, bg=BG)
         left.pack(side="left", fill="y")
 
-        # Name row — shows user name (bold) + "  DocCompare"
         name_row = tk.Frame(left, bg=BG)
         name_row.pack(anchor="w")
-
         self._logo_name_lbl = tk.Label(
             name_row, text=self._display_name(),
-            font=FONT_LOGO1, bg=BG, fg=FG,
-        )
+            font=FONT_LOGO1, bg=BG, fg=FG)
         self._logo_name_lbl.pack(side="left")
-
         tk.Label(name_row, text="  DocCompare",
                  font=FONT_LOGO2, bg=BG, fg=FG2).pack(side="left")
 
-        # "Powered by Liljedahl Legal Tech" — italic, underneath
         tk.Label(left, text="Powered by Liljedahl Legal Tech",
                  font=FONT_POWERED, bg=BG, fg=FG_DIM).pack(anchor="w", pady=(3, 0))
 
-        # Gear icon (settings) — right side of header
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", fill="y")
-
         gear = tk.Label(right, text="\u2699", font=FONT_GEAR,
                         bg=BG, fg=FG_DIM, cursor="hand2")
         gear.pack(side="right")
@@ -293,227 +379,188 @@ class DocCompareApp:
         gear.bind("<Leave>",    lambda _: gear.config(fg=FG_DIM))
         gear.bind("<Button-1>", lambda _: self._show_settings_dialog())
 
-        # ── Title block ──────────────────────────────────────────────────
+        # ── Title ────────────────────────────────────────────────────────
         title_frame = tk.Frame(outer, bg=BG)
         title_frame.pack(fill="x", pady=(0, 6))
-
-        tk.Label(
-            title_frame, text="DocCompare",
-            font=FONT_TITLE, bg=BG, fg=FG,
-        ).pack(side="left")
-
-        # Version badge
+        tk.Label(title_frame, text="DocCompare",
+                 font=FONT_TITLE, bg=BG, fg=FG).pack(side="left")
         badge_frame = tk.Frame(title_frame, bg=BG3, padx=8, pady=2,
                                highlightbackground=BORDER, highlightthickness=1)
         badge_frame.pack(side="left", padx=(12, 0), pady=(8, 0))
         tk.Label(badge_frame, text="v0.1", font=FONT_MS, bg=BG3,
                  fg=ACCENT).pack()
 
-        tk.Label(
-            outer, text="Jämför .docx-dokument och generera en diff-rapport",
-            font=FONT_SUB, bg=BG, fg=FG_DIM,
-        ).pack(anchor="w", pady=(0, 16))
+        tk.Label(outer, text=self._s("subtitle"),
+                 font=FONT_SUB, bg=BG, fg=FG_DIM).pack(anchor="w", pady=(0, 16))
 
-        # ── Thin accent line ─────────────────────────────────────────────
         tk.Frame(outer, bg=ACCENT, height=2).pack(fill="x", pady=(0, 16))
 
-        # ── File picker cards ────────────────────────────────────────────
+        # ── File cards ───────────────────────────────────────────────────
         self.orig_card, self.orig_label, self.orig_icon = self._file_card(
-            outer, "Originaldokument", "Välj fil", self._pick_original,
+            outer, self._s("original_doc"), self._s("select_file"),
+            self._pick_original,
         )
         self.mod_card, self.mod_label, self.mod_icon = self._file_card(
-            outer, "Ändrat dokument", "Välj fil", self._pick_modified,
+            outer, self._s("modified_doc"), self._s("select_file"),
+            self._pick_modified,
         )
         self.out_card, self.out_label, self.out_icon = self._file_card(
-            outer, "Spara rapport som", "Välj plats", self._pick_output,
-            default_text="Skrivbordet — automatiskt filnamn",
-            optional=True,
+            outer, self._s("save_report"), self._s("choose_location"),
+            self._pick_output,
+            default_text=self._s("desktop_auto"), optional=True,
         )
 
         # ── Compare button ───────────────────────────────────────────────
         btn_frame = tk.Frame(outer, bg=BG)
         btn_frame.pack(fill="x", pady=(8, 16))
-
         self.compare_btn = RoundedButton(
-            btn_frame, text="Jämför dokument",
+            btn_frame, text=self._s("compare_btn"),
             command=self._run_comparison,
-            bg=ACCENT, fg="#FFFFFF",
-            font_spec=FONT_BTN,
+            bg=ACCENT, fg="#FFFFFF", font_spec=FONT_BTN,
             padx=40, pady=14, radius=12,
-            state="disabled",
-            fixed_width=536,
+            state="disabled", fixed_width=536,
         )
         self.compare_btn.pack(fill="x")
 
-        # ── Progress bar ─────────────────────────────────────────────────
+        # ── Progress + status ────────────────────────────────────────────
         self.progress = ttk.Progressbar(
             outer, mode="indeterminate", length=400,
-            style="Orange.Horizontal.TProgressbar",
-        )
+            style="Orange.Horizontal.TProgressbar")
         self.progress.pack(fill="x", pady=(0, 4))
 
-        # ── Status label ─────────────────────────────────────────────────
         self.status_label = tk.Label(
-            outer, text="",
-            font=FONT_B, bg=BG, fg=FG_DIM,
-            wraplength=500, justify="left", anchor="w",
-        )
+            outer, text="", font=FONT_B, bg=BG, fg=FG_DIM,
+            wraplength=500, justify="left", anchor="w")
         self.status_label.pack(anchor="w", fill="x", pady=(6, 0))
 
         # ── Footer ───────────────────────────────────────────────────────
         footer = tk.Frame(outer, bg=BG)
         footer.pack(side="bottom", fill="x", pady=(16, 0))
-        tk.Label(
-            footer,
-            text="Liljedahl Legal Tech  \u2022  Liljedahl Advisory AB",
-            font=FONT_XS, bg=BG, fg=BORDER2,
-        ).pack()
+        tk.Label(footer,
+                 text="Liljedahl Legal Tech  \u2022  Liljedahl Advisory AB",
+                 font=FONT_XS, bg=BG, fg=BORDER2).pack()
 
-    def _file_card(
-        self, parent, title: str, btn_text: str, command,
-        default_text="Ingen fil vald", optional=False,
-    ):
-        """Create a card-style file picker row."""
+    def _file_card(self, parent, title, btn_text, command,
+                   default_text=None, optional=False):
+        if default_text is None:
+            default_text = self._s("no_file")
         card = tk.Frame(parent, bg=BG2,
                         highlightbackground=BORDER, highlightthickness=1)
         card.pack(fill="x", pady=(0, 10))
-
         inner = tk.Frame(card, bg=BG2)
         inner.pack(fill="x", padx=14, pady=12)
-
         left = tk.Frame(inner, bg=BG2)
         left.pack(side="left", fill="x", expand=True)
-
         top_row = tk.Frame(left, bg=BG2)
         top_row.pack(anchor="w")
-
-        tk.Label(
-            top_row, text=title,
-            font=FONT_H, bg=BG2, fg=FG,
-        ).pack(side="left")
-
+        tk.Label(top_row, text=title, font=FONT_H, bg=BG2, fg=FG).pack(side="left")
         if optional:
-            tk.Label(
-                top_row, text="valfritt",
-                font=FONT_XS, bg=BG2, fg=FG_DIM,
-            ).pack(side="left", padx=(8, 0))
-
-        file_lbl = tk.Label(
-            left, text=default_text,
-            font=FONT_S, bg=BG2, fg=FG_DIM,
-            anchor="w",
-        )
+            tk.Label(top_row, text=self._s("optional"),
+                     font=FONT_XS, bg=BG2, fg=FG_DIM).pack(side="left", padx=(8, 0))
+        file_lbl = tk.Label(left, text=default_text,
+                            font=FONT_S, bg=BG2, fg=FG_DIM, anchor="w")
         file_lbl.pack(anchor="w", pady=(3, 0))
-
-        btn = RoundedButton(
-            inner, text=btn_text, command=command,
-            style="ghost", bg=BG2, fg=FG2,
-            font_spec=FONT_S, padx=16, pady=8, radius=8,
-        )
+        btn = RoundedButton(inner, text=btn_text, command=command,
+                            style="ghost", bg=BG2, fg=FG2,
+                            font_spec=FONT_S, padx=16, pady=8, radius=8)
         btn.pack(side="right", padx=(12, 0))
-
-        icon_lbl = tk.Label(
-            inner, text="",
-            font=("Helvetica Neue", 13), bg=BG2, fg=GREEN,
-        )
+        icon_lbl = tk.Label(inner, text="",
+                            font=("Helvetica Neue", 13), bg=BG2, fg=GREEN)
         icon_lbl.pack(side="right", padx=(0, 4))
-
         return card, file_lbl, icon_lbl
 
     def _display_name(self) -> str:
-        if self.user_name:
-            return self.user_name
-        return "DocCompare"
-
-    # ── Window centering ─────────────────────────────────────────────────
+        return self.user_name if self.user_name else "DocCompare"
 
     def _center_window(self):
         self.root.update_idletasks()
-        w = self.root.winfo_width()
-        h = self.root.winfo_height()
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
+        w, h = self.root.winfo_width(), self.root.winfo_height()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         self.root.geometry(f"+{(sw - w) // 2}+{(sh - h) // 2 - 60}")
 
-    # ── Registration dialog (email verification) ─────────────────────────
+    # ── Registration dialog (English, with address/org/VAT) ──────────────
 
     def _show_registration_dialog(self):
-        """Two-step registration: 1) name + email → send code, 2) enter code."""
-        self._pending_code = None  # the code we sent
+        self._pending_code = None
 
         dlg = tk.Toplevel(self.root)
-        dlg.title("Registrera DocCompare")
+        dlg.title("Register DocCompare")
         dlg.configure(bg=BG)
         dlg.resizable(False, False)
         dlg.grab_set()
 
         self.root.update_idletasks()
-        dw, dh = 480, 420
+        dw, dh = 500, 580
         x = self.root.winfo_x() + (self.root.winfo_width()  - dw) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
         dlg.geometry(f"{dw}x{dh}+{x}+{y}")
 
-        pad = tk.Frame(dlg, bg=BG, padx=36, pady=28)
+        # Scrollable content area
+        pad = tk.Frame(dlg, bg=BG, padx=36, pady=24)
         pad.pack(fill="both", expand=True)
 
-        tk.Label(pad, text="Välkommen till DocCompare",
+        tk.Label(pad, text="Welcome to DocCompare",
                  font=("Helvetica Neue", 15, "bold"),
                  bg=BG, fg=FG).pack(anchor="w")
         tk.Label(pad,
-                 text="Ange ditt namn och e-postadress.\n"
-                      "En verifieringskod skickas till din e-post.",
+                 text="Enter your details below. A verification code\n"
+                      "will be sent to your email address.",
                  font=FONT_S, bg=BG, fg=FG2,
-                 wraplength=400, justify="left").pack(anchor="w", pady=(8, 20))
+                 wraplength=420, justify="left").pack(anchor="w", pady=(6, 16))
 
-        # ── Step 1 fields: name + email ──────────────────────────────────
+        # ── Step 1: all fields ───────────────────────────────────────────
         self._reg_step1 = tk.Frame(pad, bg=BG)
         self._reg_step1.pack(fill="x")
 
-        tk.Label(self._reg_step1, text="NAMN / FÖRETAG", font=FONT_SECTION,
-                 bg=BG, fg=FG_DIM).pack(anchor="w")
-        name_var = tk.StringVar()
-        name_entry = tk.Entry(self._reg_step1, textvariable=name_var, font=FONT_M,
-                              bg=BG3, fg=FG, insertbackground=FG, relief="flat", bd=0,
-                              highlightthickness=1, highlightbackground=BORDER2,
-                              highlightcolor=ACCENT)
-        name_entry.pack(fill="x", ipady=9, pady=(4, 14))
+        def _field(parent, label, hint=None):
+            tk.Label(parent, text=label, font=FONT_SECTION,
+                     bg=BG, fg=FG_DIM).pack(anchor="w")
+            if hint:
+                tk.Label(parent, text=hint, font=FONT_XS,
+                         bg=BG, fg=BORDER2).pack(anchor="w")
+            var = tk.StringVar()
+            entry = tk.Entry(parent, textvariable=var, font=FONT_M,
+                             bg=BG3, fg=FG, insertbackground=FG, relief="flat", bd=0,
+                             highlightthickness=1, highlightbackground=BORDER2,
+                             highlightcolor=ACCENT)
+            entry.pack(fill="x", ipady=8, pady=(3, 10))
+            return var, entry
+
+        name_var, name_entry = _field(self._reg_step1, "NAME / COMPANY")
         name_entry.focus_set()
+        email_var, email_entry = _field(self._reg_step1, "EMAIL ADDRESS")
+        address_var, address_entry = _field(self._reg_step1, "ADDRESS",
+                                            hint="Street, city, postal code")
+        org_var, org_entry = _field(self._reg_step1, "ORGANISATION NUMBER",
+                                    hint="If company (e.g. 556xxx-xxxx)")
+        vat_var, vat_entry = _field(self._reg_step1, "VAT NUMBER",
+                                    hint="If company outside Sweden (e.g. DE123456789)")
 
-        tk.Label(self._reg_step1, text="E-POSTADRESS", font=FONT_SECTION,
-                 bg=BG, fg=FG_DIM).pack(anchor="w")
-        email_var = tk.StringVar()
-        email_entry = tk.Entry(self._reg_step1, textvariable=email_var, font=FONT_M,
-                               bg=BG3, fg=FG, insertbackground=FG, relief="flat", bd=0,
-                               highlightthickness=1, highlightbackground=BORDER2,
-                               highlightcolor=ACCENT)
-        email_entry.pack(fill="x", ipady=9, pady=(4, 6))
-
-        # ── Step 2 fields: verification code (hidden initially) ──────────
+        # ── Step 2: verification code (hidden initially) ─────────────────
         self._reg_step2 = tk.Frame(pad, bg=BG)
-        # Not packed yet — shown after code is sent
 
-        tk.Label(self._reg_step2, text="VERIFIERINGSKOD", font=FONT_SECTION,
+        tk.Label(self._reg_step2, text="VERIFICATION CODE", font=FONT_SECTION,
                  bg=BG, fg=FG_DIM).pack(anchor="w")
         self._code_info_lbl = tk.Label(
             self._reg_step2,
-            text="En 4-siffrig kod har skickats till din e-post.",
-            font=FONT_XS, bg=BG, fg=FG2,
-        )
+            text="A 4-digit code has been sent to your email.",
+            font=FONT_XS, bg=BG, fg=FG2)
         self._code_info_lbl.pack(anchor="w", pady=(2, 6))
         code_var = tk.StringVar()
-        code_entry = tk.Entry(self._reg_step2, textvariable=code_var, font=("Menlo", 18),
+        code_entry = tk.Entry(self._reg_step2, textvariable=code_var,
+                              font=("Menlo", 18),
                               bg=BG3, fg=FG, insertbackground=FG, relief="flat", bd=0,
                               highlightthickness=1, highlightbackground=BORDER2,
                               highlightcolor=ACCENT, justify="center")
         code_entry.pack(fill="x", ipady=10, pady=(0, 6))
 
-        # Error / status label
+        # Error label
         error_lbl = tk.Label(pad, text="", font=FONT_XS, bg=BG, fg=RED, anchor="w")
         error_lbl.pack(anchor="w", fill="x", pady=(4, 0))
 
-        # Buttons
+        # Button row
         btn_row = tk.Frame(pad, bg=BG)
-        btn_row.pack(fill="x", pady=(12, 0), side="bottom")
+        btn_row.pack(fill="x", pady=(10, 0), side="bottom")
 
         # ── Step 1 action: send code ─────────────────────────────────────
         def send_code():
@@ -522,18 +569,17 @@ class DocCompareApp:
 
             if not name:
                 name_entry.config(highlightbackground=RED)
-                error_lbl.config(text="Ange ditt namn.")
+                error_lbl.config(text="Please enter your name.", fg=RED)
                 return
             name_entry.config(highlightbackground=BORDER2)
 
             if not email or "@" not in email:
                 email_entry.config(highlightbackground=RED)
-                error_lbl.config(text="Ange en giltig e-postadress.")
+                error_lbl.config(text="Please enter a valid email address.", fg=RED)
                 return
             email_entry.config(highlightbackground=BORDER2)
 
-            # Generate and send code
-            error_lbl.config(text="Skickar verifieringskod\u2026", fg=FG_DIM)
+            error_lbl.config(text="Sending verification code\u2026", fg=FG_DIM)
             dlg.update()
 
             code = _generate_code()
@@ -545,11 +591,10 @@ class DocCompareApp:
 
             def _on_sent(sent):
                 if sent:
-                    # Switch to step 2
                     self._reg_step1.pack_forget()
                     self._reg_step2.pack(fill="x")
                     self._code_info_lbl.config(
-                        text=f"En 4-siffrig kod har skickats till {email}.")
+                        text=f"A 4-digit code has been sent to {email}.")
                     error_lbl.config(text="", fg=RED)
                     send_btn.pack_forget()
                     verify_btn.pack(side="right")
@@ -557,12 +602,12 @@ class DocCompareApp:
                     code_entry.focus_set()
                 else:
                     error_lbl.config(
-                        text="Kunde inte skicka e-post. Kontrollera adressen och försök igen.",
+                        text="Could not send email. Check the address and try again.",
                         fg=RED)
 
             threading.Thread(target=_do_send, daemon=True).start()
 
-        send_btn = tk.Label(btn_row, text="Skicka kod", font=FONT_B,
+        send_btn = tk.Label(btn_row, text="Send Code", font=FONT_B,
                             bg=ACCENT, fg="#FFFFFF", padx=24, pady=8,
                             cursor="hand2")
         send_btn.pack(side="right")
@@ -573,80 +618,146 @@ class DocCompareApp:
         email_entry.bind("<Return>", lambda _: send_code())
         name_entry.bind("<Return>", lambda _: email_entry.focus_set())
 
-        # ── Step 2 action: verify code ───────────────────────────────────
+        # ── Step 2 action: verify ────────────────────────────────────────
         def verify_code():
             entered = code_var.get().strip()
             if not entered:
                 code_entry.config(highlightbackground=RED)
-                error_lbl.config(text="Ange verifieringskoden.", fg=RED)
+                error_lbl.config(text="Please enter the verification code.", fg=RED)
                 return
 
             if entered == self._pending_code:
-                # Success!
                 name = name_var.get().strip()
                 email = email_var.get().strip()
                 self.user_name = name
                 self._verified = True
                 self._config["user_name"] = name
                 self._config["email"] = email
+                self._config["address"] = address_var.get().strip()
+                self._config["org_nr"] = org_var.get().strip()
+                self._config["vat_nr"] = vat_var.get().strip()
                 self._config["verified"] = True
+                self._config["registered"] = datetime.now().isoformat()
                 save_config(self._config)
+
+                # Send registration data to spreadsheet
+                def _reg():
+                    _send_registration({
+                        "name": name,
+                        "company": name,
+                        "email": email,
+                        "address": address_var.get().strip(),
+                        "org_nr": org_var.get().strip(),
+                        "vat_nr": vat_var.get().strip(),
+                        "registered": self._config["registered"],
+                    })
+                threading.Thread(target=_reg, daemon=True).start()
+
                 self._logo_name_lbl.config(text=self._display_name())
                 dlg.destroy()
+
+                # Show language picker after registration
+                self.root.after(300, self._show_language_dialog)
             else:
                 code_entry.config(highlightbackground=RED)
-                error_lbl.config(text="Fel kod. Kontrollera din e-post och försök igen.",
-                                 fg=RED)
+                error_lbl.config(
+                    text="Wrong code. Check your email and try again.", fg=RED)
 
-        verify_btn = tk.Label(btn_row, text="Verifiera", font=FONT_B,
+        verify_btn = tk.Label(btn_row, text="Verify", font=FONT_B,
                               bg=ACCENT, fg="#FFFFFF", padx=24, pady=8,
                               cursor="hand2")
         verify_btn.bind("<Button-1>", lambda _: verify_code())
         verify_btn.bind("<Enter>", lambda _: verify_btn.config(bg=ACCENT2))
         verify_btn.bind("<Leave>", lambda _: verify_btn.config(bg=ACCENT))
-        # Not packed yet — shown in step 2
 
-        # Resend button
         def resend():
             code = _generate_code()
             self._pending_code = code
             email = email_var.get().strip()
             name = name_var.get().strip()
-            error_lbl.config(text="Skickar ny kod\u2026", fg=FG_DIM)
+            error_lbl.config(text="Sending new code\u2026", fg=FG_DIM)
             dlg.update()
-
             def _do():
                 sent = _send_verification_code(email, name, code)
                 dlg.after(0, lambda: error_lbl.config(
-                    text="Ny kod skickad!" if sent else "Kunde inte skicka. Försök igen.",
+                    text="New code sent!" if sent else "Could not send. Try again.",
                     fg=GREEN if sent else RED))
             threading.Thread(target=_do, daemon=True).start()
 
-        resend_btn = tk.Label(btn_row, text="Skicka igen", font=FONT_B,
-                              bg=BG3, fg=FG2, padx=24, pady=8,
-                              cursor="hand2")
+        resend_btn = tk.Label(btn_row, text="Resend", font=FONT_B,
+                              bg=BG3, fg=FG2, padx=24, pady=8, cursor="hand2")
         resend_btn.bind("<Button-1>", lambda _: resend())
         resend_btn.bind("<Enter>", lambda _: resend_btn.config(bg=BG4, fg=FG))
         resend_btn.bind("<Leave>", lambda _: resend_btn.config(bg=BG3, fg=FG2))
-        # Not packed yet — shown in step 2
 
         code_entry.bind("<Return>", lambda _: verify_code())
-
-        # Cannot close without verifying
         dlg.protocol("WM_DELETE_WINDOW", lambda: None)
         dlg.wait_window()
 
-    # ── Settings dialog (change name) ────────────────────────────────────
+    # ── Language selection dialog ─────────────────────────────────────────
 
-    def _show_settings_dialog(self):
+    def _show_language_dialog(self):
         dlg = tk.Toplevel(self.root)
-        dlg.title("Inställningar")
+        dlg.title("Language / Språk")
         dlg.configure(bg=BG)
         dlg.resizable(False, False)
         dlg.grab_set()
 
         self.root.update_idletasks()
-        dw, dh = 440, 240
+        dw, dh = 400, 220
+        x = self.root.winfo_x() + (self.root.winfo_width()  - dw) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
+        dlg.geometry(f"{dw}x{dh}+{x}+{y}")
+
+        pad = tk.Frame(dlg, bg=BG, padx=36, pady=28)
+        pad.pack(fill="both", expand=True)
+
+        tk.Label(pad, text="Choose your language",
+                 font=("Helvetica Neue", 15, "bold"),
+                 bg=BG, fg=FG).pack(anchor="w")
+        tk.Label(pad, text="This can be changed later in Settings.",
+                 font=FONT_S, bg=BG, fg=FG2).pack(anchor="w", pady=(6, 24))
+
+        btn_row = tk.Frame(pad, bg=BG)
+        btn_row.pack(fill="x")
+
+        def pick(lang):
+            self.lang = lang
+            self._config["language"] = lang
+            save_config(self._config)
+            dlg.destroy()
+            # Rebuild the UI in the chosen language
+            self._populate_main_ui()
+
+        for lang_code, label in [("sv", "Svenska"), ("en", "English")]:
+            btn = tk.Label(btn_row, text=label, font=("Helvetica Neue", 13, "bold"),
+                           bg=ACCENT if lang_code == "sv" else BG3,
+                           fg="#FFFFFF" if lang_code == "sv" else FG2,
+                           padx=32, pady=12, cursor="hand2")
+            btn.pack(side="left", padx=(0, 12))
+            _code = lang_code
+            btn.bind("<Button-1>", lambda _, c=_code: pick(c))
+            if lang_code == "sv":
+                btn.bind("<Enter>", lambda _, b=btn: b.config(bg=ACCENT2))
+                btn.bind("<Leave>", lambda _, b=btn: b.config(bg=ACCENT))
+            else:
+                btn.bind("<Enter>", lambda _, b=btn: b.config(bg=BG4, fg=FG))
+                btn.bind("<Leave>", lambda _, b=btn: b.config(bg=BG3, fg=FG2))
+
+        dlg.protocol("WM_DELETE_WINDOW", lambda: pick("sv"))
+        dlg.wait_window()
+
+    # ── Settings dialog ──────────────────────────────────────────────────
+
+    def _show_settings_dialog(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title(self._s("settings_title"))
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        self.root.update_idletasks()
+        dw, dh = 440, 310
         x = self.root.winfo_x() + (self.root.winfo_width()  - dw) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
         dlg.geometry(f"{dw}x{dh}+{x}+{y}")
@@ -654,11 +765,12 @@ class DocCompareApp:
         pad = tk.Frame(dlg, bg=BG, padx=36, pady=32)
         pad.pack(fill="both", expand=True)
 
-        tk.Label(pad, text="Inställningar", font=("Helvetica Neue", 13, "bold"),
+        tk.Label(pad, text=self._s("settings_title"),
+                 font=("Helvetica Neue", 13, "bold"),
                  bg=BG, fg=FG).pack(anchor="w")
-        tk.Label(pad, text="Ändra namn eller företagsnamn:",
+        tk.Label(pad, text=self._s("settings_msg"),
                  font=FONT_S, bg=BG, fg=FG2,
-                 wraplength=368, justify="left").pack(anchor="w", pady=(8, 18))
+                 wraplength=368, justify="left").pack(anchor="w", pady=(8, 14))
 
         entry_var = tk.StringVar(value=self.user_name)
         entry = tk.Entry(pad, textvariable=entry_var, font=FONT_M,
@@ -669,6 +781,21 @@ class DocCompareApp:
         entry.focus_set()
         entry.select_range(0, "end")
 
+        # Language selector
+        lang_frame = tk.Frame(pad, bg=BG)
+        lang_frame.pack(fill="x", pady=(14, 0))
+        tk.Label(lang_frame, text=self._s("language"), font=FONT_S,
+                 bg=BG, fg=FG2).pack(side="left")
+
+        lang_var = tk.StringVar(value=self.lang)
+        for val, lbl in [("sv", "Svenska"), ("en", "English")]:
+            tk.Radiobutton(lang_frame, text=lbl, variable=lang_var, value=val,
+                           font=FONT_S, bg=BG3, fg=FG, selectcolor=ACCENT,
+                           activebackground=BG4, activeforeground=FG,
+                           indicatoron=False, relief="solid", bd=1,
+                           padx=10, pady=3, cursor="hand2"
+                           ).pack(side="left", padx=(8, 0))
+
         btn_row = tk.Frame(pad, bg=BG)
         btn_row.pack(fill="x", pady=(18, 0))
 
@@ -677,13 +804,19 @@ class DocCompareApp:
             if not name:
                 entry.config(highlightbackground=RED)
                 return
+            new_lang = lang_var.get()
+            lang_changed = (new_lang != self.lang)
             self.user_name = name
+            self.lang = new_lang
             self._config["user_name"] = name
+            self._config["language"] = new_lang
             save_config(self._config)
             self._logo_name_lbl.config(text=self._display_name())
             dlg.destroy()
+            if lang_changed:
+                self._populate_main_ui()
 
-        save_lbl = tk.Label(btn_row, text="Spara", font=FONT_B,
+        save_lbl = tk.Label(btn_row, text=self._s("save"), font=FONT_B,
                             bg=ACCENT, fg="#FFFFFF", padx=24, pady=8,
                             cursor="hand2")
         save_lbl.pack(side="right")
@@ -691,9 +824,8 @@ class DocCompareApp:
         save_lbl.bind("<Enter>",  lambda _: save_lbl.config(bg=ACCENT2))
         save_lbl.bind("<Leave>",  lambda _: save_lbl.config(bg=ACCENT))
 
-        cancel_lbl = tk.Label(btn_row, text="Avbryt", font=FONT_B,
-                              bg=BG3, fg=FG2, padx=24, pady=8,
-                              cursor="hand2")
+        cancel_lbl = tk.Label(btn_row, text=self._s("cancel"), font=FONT_B,
+                              bg=BG3, fg=FG2, padx=24, pady=8, cursor="hand2")
         cancel_lbl.pack(side="right", padx=(0, 8))
         cancel_lbl.bind("<Button-1>", lambda _: dlg.destroy())
         cancel_lbl.bind("<Enter>", lambda _: cancel_lbl.config(bg=BG4, fg=FG))
@@ -707,8 +839,8 @@ class DocCompareApp:
 
     def _pick_original(self):
         path = filedialog.askopenfilename(
-            title="Välj originaldokument",
-            filetypes=[("Word-dokument", "*.docx")],
+            title=self._s("pick_original_title"),
+            filetypes=[(self._s("word_docs"), "*.docx")],
         )
         if path:
             self.original_path = Path(path)
@@ -719,8 +851,8 @@ class DocCompareApp:
 
     def _pick_modified(self):
         path = filedialog.askopenfilename(
-            title="Välj ändrat dokument",
-            filetypes=[("Word-dokument", "*.docx")],
+            title=self._s("pick_modified_title"),
+            filetypes=[(self._s("word_docs"), "*.docx")],
         )
         if path:
             self.modified_path = Path(path)
@@ -731,7 +863,7 @@ class DocCompareApp:
 
     def _pick_output(self):
         path = filedialog.asksaveasfilename(
-            title="Spara rapport",
+            title=self._s("pick_output_title"),
             defaultextension=".pdf",
             filetypes=[("PDF", "*.pdf")],
             initialdir=Path.home() / "Desktop",
@@ -746,10 +878,7 @@ class DocCompareApp:
 
     def _update_button_state(self):
         if not self._verified:
-            self.status_label.config(
-                text="Programmet är inte aktiverat. Starta om och verifiera din e-post.",
-                fg=RED,
-            )
+            self.status_label.config(text=self._s("not_verified"), fg=RED)
             self.compare_btn.config(state="disabled")
             return
 
@@ -758,16 +887,12 @@ class DocCompareApp:
             ext2 = self.modified_path.suffix.lower()
             if ext1 != ext2:
                 self.status_label.config(
-                    text=f"Båda filerna måste vara samma format ({ext1} \u2260 {ext2})",
-                    fg=RED,
-                )
+                    text=self._s("format_mismatch", ext1=ext1, ext2=ext2), fg=RED)
                 self.compare_btn.config(state="disabled")
                 return
             if ext1 not in (".docx",):
                 self.status_label.config(
-                    text=f"Format stöds ej: {ext1}",
-                    fg=RED,
-                )
+                    text=self._s("format_unsupported", ext=ext1), fg=RED)
                 self.compare_btn.config(state="disabled")
                 return
             self.status_label.config(text="", fg=FG_DIM)
@@ -777,13 +902,13 @@ class DocCompareApp:
 
     def _default_output(self) -> Path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return Path.home() / "Desktop" / f"jämförelse_{ts}.pdf"
+        return Path.home() / "Desktop" / f"comparison_{ts}.pdf"
 
     # ── Comparison logic ─────────────────────────────────────────────────
 
     def _run_comparison(self):
         if not self._verified:
-            self.status_label.config(text="Verifiera din e-post först.", fg=RED)
+            self.status_label.config(text=self._s("verify_first"), fg=RED)
             return
 
         self.compare_btn.config(state="disabled")
@@ -798,28 +923,25 @@ class DocCompareApp:
                 from doccompare.comparison.ooxml_engine import compare as ooxml_compare
                 from doccompare.rendering.pdf_pipeline import produce_pdf
 
-                set_status("Jämför dokument\u2026")
+                set_status(self._s("comparing"))
                 doc_tree, summary = ooxml_compare(
-                    self.original_path, self.modified_path, None,
-                )
+                    self.original_path, self.modified_path, None)
 
-                set_status("Renderar PDF\u2026")
+                set_status(self._s("rendering"))
                 produce_pdf(
                     doc_tree, output, summary,
                     original_name=self.original_path.name,
                     modified_name=self.modified_path.name,
-                    docx_path=self.modified_path,
-                )
+                    docx_path=self.modified_path)
 
                 s = summary
                 msg = (
-                    f"Klart! Rapport sparad: {output.name}\n"
-                    f"+{s.get('added_words', 0)} tillagda  "
-                    f"\u2212{s.get('deleted_words', 0)} borttagna  "
-                    f"{s.get('unchanged_words', 0)} oförändrade"
+                    f"{self._s('done', filename=output.name)}\n"
+                    f"+{s.get('added_words', 0)} {self._s('added')}  "
+                    f"\u2212{s.get('deleted_words', 0)} {self._s('deleted')}  "
+                    f"{s.get('unchanged_words', 0)} {self._s('unchanged')}"
                 )
                 self.root.after(0, lambda: self._on_success(msg, output))
-
             except Exception as e:
                 self.root.after(0, lambda: self._on_error(str(e)))
 
@@ -834,7 +956,8 @@ class DocCompareApp:
 
     def _on_error(self, error: str):
         self.progress.stop()
-        self.status_label.config(text=f"Fel: {error}", fg=RED)
+        self.status_label.config(
+            text=f"{self._s('error_prefix')}: {error}", fg=RED)
         self.compare_btn.config(state="normal")
 
 
