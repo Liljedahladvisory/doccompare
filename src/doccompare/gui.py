@@ -490,7 +490,7 @@ class DocCompareApp:
         dlg.grab_set()
 
         self.root.update_idletasks()
-        dw, dh = 500, 580
+        dw, dh = 500, 680
         x = self.root.winfo_x() + (self.root.winfo_width()  - dw) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
         dlg.geometry(f"{dw}x{dh}+{x}+{y}")
