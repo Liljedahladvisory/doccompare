@@ -3,19 +3,31 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import sys
 import os
 import json
 import random
+import hashlib
+import hmac as _hmac
+import base64
+import uuid
 import urllib.request
 import urllib.error
 import ssl
 
 # ── Config ──────────────────────────────────────────────────────────────────
+_APP_DATA = os.path.expanduser("~/.doccompare_llt")
 CONFIG_PATH = os.path.expanduser("~/.doccompare_llt.json")
+LICENSE_PATH = os.path.join(_APP_DATA, "license.json")
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzevrhw7cJdjHZLn_OCfSR7RVSaU2hgV8RKU3hzeSkGouKYa-0ioo85eYoWkiAkHVpB/exec"
 VERIFICATION_TIMEOUT = 600  # 10 min
+
+# HMAC secret for license signing (same pattern as Meeting Recorder LLT)
+_LICENSE_HMAC_SECRET = bytes.fromhex(
+    "d4e7a1c9f03b48d6b5fc81927364e0a2"
+    "29c85d3f6a7e41089bdf02c5174a63e8"
+)
 
 
 def load_config() -> dict:
@@ -34,6 +46,104 @@ def save_config(cfg: dict):
             json.dump(cfg, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+
+# ── License system ─────────────────────────────────────────────────────────
+
+def _get_machine_id() -> str:
+    """Get a stable machine identifier."""
+    try:
+        return str(uuid.getnode())
+    except Exception:
+        return "unknown"
+
+
+def _generate_license_key(name: str, email: str, company: str = "",
+                          days: int = 365) -> str:
+    """Generate an HMAC-signed license key valid for `days` days."""
+    created = date.today().isoformat()
+    expires = (date.today() + timedelta(days=days)).isoformat()
+    payload = {
+        "company": company or name,
+        "created": created,
+        "email": email,
+        "expires": expires,
+        "trial": True,
+    }
+    payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    payload_bytes = payload_json.encode("utf-8")
+    sig = _hmac.new(_LICENSE_HMAC_SECRET, payload_bytes, hashlib.sha256).digest()
+    combined = payload_bytes + b"|" + sig
+    key_b64 = base64.urlsafe_b64encode(combined).decode("ascii")
+    chunks = [key_b64[i:i+4] for i in range(0, len(key_b64), 4)]
+    return "LLT." + ".".join(chunks)
+
+
+def _verify_license(key_str: str) -> dict | None:
+    """Verify a license key (HMAC-SHA256). Returns payload dict or None."""
+    try:
+        raw = key_str.strip().replace("\n", "").replace("\r", "").replace(" ", "")
+        if raw.upper().startswith("LLT."):
+            raw = raw[4:]
+        raw = raw.replace(".", "")
+        pad = 4 - len(raw) % 4
+        if pad != 4:
+            raw += "=" * pad
+        combined = base64.urlsafe_b64decode(raw)
+        if len(combined) < 34:
+            return None
+        sig = combined[-32:]
+        if combined[-33:-32] != b"|":
+            return None
+        payload_bytes = combined[:-33]
+        expected = _hmac.new(_LICENSE_HMAC_SECRET, payload_bytes,
+                             hashlib.sha256).digest()
+        if not _hmac.compare_digest(sig, expected):
+            return None
+        return json.loads(payload_bytes.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def _save_license(key_str: str, payload: dict):
+    """Save license data to disk."""
+    os.makedirs(_APP_DATA, exist_ok=True)
+    license_data = {
+        "key": key_str,
+        "machine_id": _get_machine_id(),
+        "activated": date.today().isoformat(),
+        "company": payload.get("company", ""),
+        "email": payload.get("email", ""),
+        "expires": payload.get("expires", ""),
+    }
+    with open(LICENSE_PATH, "w", encoding="utf-8") as f:
+        json.dump(license_data, f, indent=2, ensure_ascii=False)
+
+
+def _check_license_file() -> tuple[bool, str, dict | None]:
+    """Check stored license. Returns (valid, message, payload)."""
+    if not os.path.isfile(LICENSE_PATH):
+        return False, "No license found.", None
+    try:
+        data = json.loads(open(LICENSE_PATH, encoding="utf-8").read())
+        key_str = data.get("key", "")
+        stored_machine = data.get("machine_id", "")
+    except Exception:
+        return False, "Could not read license file.", None
+
+    payload = _verify_license(key_str)
+    if payload is None:
+        return False, "Invalid license key.", None
+
+    current_machine = _get_machine_id()
+    if stored_machine and stored_machine != current_machine:
+        return False, "License is registered on a different computer.", None
+
+    expires = payload.get("expires", "2000-01-01")
+    if date.fromisoformat(expires) < date.today():
+        return False, f"Your license expired on {expires}. Contact Liljedahl Legal Tech for renewal.", None
+
+    return True, "ok", payload
 
 
 # ── Translations ────────────────────────────────────────────────────────────
@@ -330,9 +440,15 @@ class DocCompareApp:
 
         if not self._verified:
             self.root.after(300, self._show_registration_dialog)
-        elif not self._config.get("language"):
-            # Verified but no language chosen yet — show language picker
-            self.root.after(300, self._show_language_dialog)
+        elif self._verified:
+            # Check license validity
+            valid, msg, payload = _check_license_file()
+            if not valid and os.path.isfile(LICENSE_PATH):
+                # License exists but expired/invalid
+                self.root.after(300, lambda: self._show_expired_window(msg))
+            elif not self._config.get("language"):
+                # Verified but no language chosen yet — show language picker
+                self.root.after(300, self._show_language_dialog)
 
     def _s(self, key, **kw):
         return _t(key, self.lang, **kw)
@@ -629,27 +745,42 @@ class DocCompareApp:
             if entered == self._pending_code:
                 name = name_var.get().strip()
                 email = email_var.get().strip()
+                company = name
+                address = address_var.get().strip()
+                org_nr = org_var.get().strip()
+                vat_nr = vat_var.get().strip()
+
+                # Generate 12-month HMAC-signed license
+                license_key = _generate_license_key(name, email, company, days=365)
+                license_payload = _verify_license(license_key)
+                _save_license(license_key, license_payload)
+
+                license_expires = (date.today() + timedelta(days=365)).isoformat()
+
                 self.user_name = name
                 self._verified = True
                 self._config["user_name"] = name
                 self._config["email"] = email
-                self._config["address"] = address_var.get().strip()
-                self._config["org_nr"] = org_var.get().strip()
-                self._config["vat_nr"] = vat_var.get().strip()
+                self._config["address"] = address
+                self._config["org_nr"] = org_nr
+                self._config["vat_nr"] = vat_nr
                 self._config["verified"] = True
                 self._config["registered"] = datetime.now().isoformat()
+                self._config["license_expires"] = license_expires
                 save_config(self._config)
 
                 # Send registration data to spreadsheet
                 def _reg():
                     _send_registration({
                         "name": name,
-                        "company": name,
+                        "company": company,
                         "email": email,
-                        "address": address_var.get().strip(),
-                        "org_nr": org_var.get().strip(),
-                        "vat_nr": vat_var.get().strip(),
+                        "address": address,
+                        "org_nr": org_nr,
+                        "vat_nr": vat_nr,
                         "registered": self._config["registered"],
+                        "license_expires": license_expires,
+                        "machine_id": _get_machine_id(),
                     })
                 threading.Thread(target=_reg, daemon=True).start()
 
@@ -745,6 +876,51 @@ class DocCompareApp:
                 btn.bind("<Leave>", lambda _, b=btn: b.config(bg=BG3, fg=FG2))
 
         dlg.protocol("WM_DELETE_WINDOW", lambda: pick("sv"))
+        dlg.wait_window()
+
+    # ── License expired dialog ────────────────────────────────────────────
+
+    def _show_expired_window(self, msg: str):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("License Expired")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.grab_set()
+
+        self.root.update_idletasks()
+        dw, dh = 460, 260
+        x = self.root.winfo_x() + (self.root.winfo_width() - dw) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dh) // 2
+        dlg.geometry(f"{dw}x{dh}+{x}+{y}")
+
+        pad = tk.Frame(dlg, bg=BG, padx=36, pady=28)
+        pad.pack(fill="both", expand=True)
+
+        tk.Label(pad, text="License Expired",
+                 font=("Helvetica Neue", 15, "bold"),
+                 bg=BG, fg=RED).pack(anchor="w")
+        tk.Label(pad, text=msg,
+                 font=FONT_S, bg=BG, fg=FG2,
+                 wraplength=380, justify="left").pack(anchor="w", pady=(10, 6))
+        tk.Label(pad,
+                 text="Please contact svante@liljedahladvisory.se\nto renew your license.",
+                 font=FONT_S, bg=BG, fg=FG_DIM,
+                 wraplength=380, justify="left").pack(anchor="w", pady=(6, 20))
+
+        btn_row = tk.Frame(pad, bg=BG)
+        btn_row.pack(fill="x")
+
+        def quit_app():
+            dlg.destroy()
+            self.root.destroy()
+
+        quit_btn = tk.Label(btn_row, text="Quit", font=FONT_B,
+                            bg=RED, fg="#FFFFFF", padx=24, pady=8,
+                            cursor="hand2")
+        quit_btn.pack(side="right")
+        quit_btn.bind("<Button-1>", lambda _: quit_app())
+
+        dlg.protocol("WM_DELETE_WINDOW", quit_app)
         dlg.wait_window()
 
     # ── Settings dialog ──────────────────────────────────────────────────
@@ -882,6 +1058,13 @@ class DocCompareApp:
             self.compare_btn.config(state="disabled")
             return
 
+        # Check license
+        valid, msg, _ = _check_license_file()
+        if not valid:
+            self.status_label.config(text=msg, fg=RED)
+            self.compare_btn.config(state="disabled")
+            return
+
         if self.original_path and self.modified_path:
             ext1 = self.original_path.suffix.lower()
             ext2 = self.modified_path.suffix.lower()
@@ -909,6 +1092,11 @@ class DocCompareApp:
     def _run_comparison(self):
         if not self._verified:
             self.status_label.config(text=self._s("verify_first"), fg=RED)
+            return
+
+        valid, msg, _ = _check_license_file()
+        if not valid:
+            self._show_expired_window(msg)
             return
 
         self.compare_btn.config(state="disabled")
