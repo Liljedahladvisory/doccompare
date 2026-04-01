@@ -199,4 +199,101 @@ _cu.find_library = _patched_find
 else:
     print(f"  WARNING: {boot_py} not found!")
 
+# ── Step 7: Bundle Tcl/Tk libraries ──────────────────────────────────────────
+# tkinter needs the Tcl/Tk script libraries (init.tcl, tk.tcl etc.)
+# Without these, the app crashes with "Cannot find a usable init.tcl"
+
+print("Bundling Tcl/Tk libraries...")
+
+import glob
+
+TCL_TK_BASE = None
+for candidate in glob.glob("/opt/homebrew/Cellar/tcl-tk/*/lib"):
+    if os.path.isdir(candidate):
+        TCL_TK_BASE = candidate
+        break
+
+if TCL_TK_BASE:
+    RESOURCES = os.path.join(APP_PATH, "Contents", "Resources")
+    LIB_DIR = os.path.join(APP_PATH, "Contents", "lib")
+    os.makedirs(LIB_DIR, exist_ok=True)
+
+    # Find tcl and tk version directories
+    tcl_dirs = glob.glob(os.path.join(TCL_TK_BASE, "tcl[0-9]*"))
+    tk_dirs = glob.glob(os.path.join(TCL_TK_BASE, "tk[0-9]*"))
+
+    for src_dir in tcl_dirs + tk_dirs:
+        dirname = os.path.basename(src_dir)
+        dst_dir = os.path.join(LIB_DIR, dirname)
+        if os.path.isdir(src_dir):
+            if os.path.exists(dst_dir):
+                shutil.rmtree(dst_dir)
+            shutil.copytree(src_dir, dst_dir)
+            print(f"  Copied: {dirname}/ ({sum(1 for _,_,f in os.walk(dst_dir) for _ in f)} files)")
+
+    # Also copy Tcl/Tk dylibs and their dependencies (libtommath)
+    tcl_dylibs = glob.glob(os.path.join(TCL_TK_BASE, "libtcl9*.dylib"))
+    for dylib in tcl_dylibs:
+        bn = os.path.basename(dylib)
+        dst = os.path.join(FRAMEWORKS, bn)
+        shutil.copy2(dylib, dst)
+        os.chmod(dst, 0o755)
+        print(f"  Copied: {bn}")
+
+    # Bundle libtommath (transitive dependency of Tcl)
+    tommath_paths = glob.glob("/opt/homebrew/opt/libtommath/lib/libtommath.1.dylib")
+    for tm in tommath_paths:
+        bn = os.path.basename(tm)
+        dst = os.path.join(FRAMEWORKS, bn)
+        shutil.copy2(tm, dst)
+        os.chmod(dst, 0o755)
+        subprocess.run(["install_name_tool", "-id",
+                        f"@executable_path/../Frameworks/{bn}", dst],
+                       capture_output=True)
+        print(f"  Copied: {bn}")
+
+    # Fix Tcl/Tk dylib install names and references
+    for dylib in tcl_dylibs:
+        bn = os.path.basename(dylib)
+        dst = os.path.join(FRAMEWORKS, bn)
+        subprocess.run(["install_name_tool", "-id",
+                        f"@executable_path/../Frameworks/{bn}", dst],
+                       capture_output=True)
+        # Fix libtommath reference
+        subprocess.run(["install_name_tool", "-change",
+                        "/opt/homebrew/opt/libtommath/lib/libtommath.1.dylib",
+                        "@executable_path/../Frameworks/libtommath.1.dylib", dst],
+                       capture_output=True)
+        # Fix cross-references between tcl dylibs
+        subprocess.run(["install_name_tool", "-change",
+                        "/opt/homebrew/opt/tcl-tk/lib/libtcl9.0.dylib",
+                        "@executable_path/../Frameworks/libtcl9.0.dylib", dst],
+                       capture_output=True)
+        subprocess.run(["install_name_tool", "-change",
+                        "/opt/homebrew/opt/tcl-tk/lib/libtcl9tk9.0.dylib",
+                        "@executable_path/../Frameworks/libtcl9tk9.0.dylib", dst],
+                       capture_output=True)
+    print("  Fixed Tcl/Tk install names")
+
+    # Patch __boot__.py to set TCL_LIBRARY and TK_LIBRARY
+    if os.path.exists(boot_py):
+        with open(boot_py, "r") as f:
+            content = f.read()
+        if "TCL_LIBRARY" not in content:
+            tcl_ver = os.path.basename(tcl_dirs[0]) if tcl_dirs else "tcl9.0"
+            tk_ver = os.path.basename(tk_dirs[0]) if tk_dirs else "tk9.0"
+            tcl_patch = f'''
+# Tcl/Tk library paths
+import os as _os2
+_lib_dir = _os2.path.join(_os2.path.dirname(_os2.path.dirname(_os2.path.abspath(__file__))), "lib")
+_os2.environ["TCL_LIBRARY"] = _os2.path.join(_lib_dir, "{tcl_ver}")
+_os2.environ["TK_LIBRARY"] = _os2.path.join(_lib_dir, "{tk_ver}")
+
+'''
+            with open(boot_py, "w") as f:
+                f.write(tcl_patch + content)
+            print(f"  Patched __boot__.py with TCL_LIBRARY={tcl_ver}, TK_LIBRARY={tk_ver}")
+else:
+    print("  WARNING: Tcl/Tk not found in Homebrew!")
+
 print(f"\nDone! {len(seen)} dylibs bundled into {FRAMEWORKS}")
