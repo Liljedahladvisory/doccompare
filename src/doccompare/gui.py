@@ -361,23 +361,36 @@ class DocCompareApp:
 
         def worker():
             try:
-                ext = self.original_path.suffix.lower()
+                from doccompare.comparison.adapters import get_adapter
 
-                from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-                from doccompare.rendering.pdf_pipeline import produce_pdf
+                summary = None
+                adapter = get_adapter()
+                if adapter:
+                    set_status("Comparing via Word\u2026")
+                    try:
+                        summary = adapter.compare_and_export(
+                            self.original_path, self.modified_path, output,
+                            original_name=self.original_path.name,
+                            modified_name=self.modified_path.name,
+                        )
+                    except RuntimeError:
+                        summary = None  # fall through to fallback
 
-                set_status("Comparing documents\u2026")
-                doc_tree, summary = ooxml_compare(
-                    self.original_path, self.modified_path, None,
-                )
+                if summary is None:
+                    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+                    from doccompare.rendering.pdf_pipeline import produce_pdf
 
-                set_status("Rendering PDF\u2026")
-                produce_pdf(
-                    doc_tree, output, summary,
-                    original_name=self.original_path.name,
-                    modified_name=self.modified_path.name,
-                    docx_path=self.modified_path,
-                )
+                    set_status("Comparing documents\u2026")
+                    doc_tree, summary = ooxml_compare(
+                        self.original_path, self.modified_path, None,
+                    )
+                    set_status("Rendering PDF\u2026")
+                    produce_pdf(
+                        doc_tree, output, summary,
+                        original_name=self.original_path.name,
+                        modified_name=self.modified_path.name,
+                        docx_path=self.modified_path,
+                    )
 
                 s = summary
                 msg = (

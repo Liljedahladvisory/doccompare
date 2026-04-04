@@ -930,7 +930,19 @@ def _render_summary_pdf(summary: dict, original_name: str, modified_name: str, d
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     added = summary.get("added_words", 0)
     deleted = summary.get("deleted_words", 0)
+    moved = summary.get("moved_words", 0)
     unchanged = summary.get("unchanged_words", 0)
+
+    moved_stat_html = ""
+    if moved > 0:
+        moved_stat_html = f'<div class="stat stat-moved">{moved} words moved</div>'
+
+    moved_legend_html = ""
+    if moved > 0:
+        moved_legend_html = (
+            '<p><span style="color:#2e7d32;text-decoration:underline">Moved text</span> &mdash; '
+            'text that appears in both documents but has been relocated to a different position.</p>'
+        )
 
     css_path = Path(__file__).parent / "styles.css"
     css = css_path.read_text(encoding="utf-8")
@@ -967,6 +979,7 @@ def _render_summary_pdf(summary: dict, original_name: str, modified_name: str, d
 }}
 .summary-stats .stat-added {{ color: #0047ab; }}
 .summary-stats .stat-deleted {{ color: #c0392b; }}
+.summary-stats .stat-moved {{ color: #2e7d32; }}
 .summary-legend h3 {{
     font-size: 13pt;
     color: #2c3e50;
@@ -996,6 +1009,7 @@ def _render_summary_pdf(summary: dict, original_name: str, modified_name: str, d
         <div class="summary-stats">
             <div class="stat stat-added">+{added} words added</div>
             <div class="stat stat-deleted">&minus;{deleted} words deleted</div>
+            {moved_stat_html}
             <div class="stat">{unchanged} words unchanged</div>
         </div>
         <div class="summary-legend">
@@ -1004,6 +1018,7 @@ def _render_summary_pdf(summary: dict, original_name: str, modified_name: str, d
                text present in the modified document but not in the original.</p>
             <p><span style="color:#c0392b;text-decoration:line-through">Deleted text</span> &mdash;
                text present in the original but not in the modified document.</p>
+            {moved_legend_html}
             <p>Unchanged text &mdash;
                text identical in both documents.</p>
         </div>

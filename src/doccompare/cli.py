@@ -78,16 +78,35 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
 
     s = summary
     console.print(f"\n[bold]Comparison complete![/bold] Report saved: [cyan]{output}[/cyan]")
+    moved = s.get('moved_words', 0)
+    moved_str = f"  [yellow]{moved} words moved[/yellow]" if moved else ""
     console.print(f"  [green]+{s.get('added_words', 0)} words added[/green]  "
-                  f"[red]-{s.get('deleted_words', 0)} words deleted[/red]  "
+                  f"[red]-{s.get('deleted_words', 0)} words deleted[/red]"
+                  f"{moved_str}  "
                   f"[dim]{s.get('unchanged_words', 0)} words unchanged[/dim]")
 
 
 def _compare_docx(original, modified, output, author, progress, task):
-    """DOCX comparison via OOXML engine + Word headless PDF export."""
+    """DOCX comparison — Word-native adapter with ooxml_engine fallback."""
+    from doccompare.comparison.adapters import get_adapter
+
+    adapter = get_adapter()
+    if adapter:
+        progress.update(task, description="Comparing via Word\u2026")
+        try:
+            return adapter.compare_and_export(
+                original, modified, output,
+                original_name=original.name,
+                modified_name=modified.name,
+            )
+        except RuntimeError as e:
+            logger.warning(f"Word adapter failed, falling back to OOXML: {e}")
+
+    # Fallback: XML-level comparison
     from doccompare.comparison.ooxml_engine import compare as ooxml_compare
     from doccompare.rendering.pdf_pipeline import produce_pdf
 
+    progress.update(task, description="Comparing documents\u2026")
     doc_tree, summary = ooxml_compare(original, modified, None, author=author)
 
     progress.update(task, description="Rendering PDF\u2026")
