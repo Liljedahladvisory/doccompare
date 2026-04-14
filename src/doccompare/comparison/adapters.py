@@ -108,19 +108,33 @@ class MacWordAdapter(ComparisonAdapter):
         tell application "Microsoft Word"
             open "{orig_abs}"
             delay 2
-            set origDoc to document "{orig_name}"
+            set origDoc to active document
+            set origName to name of origDoc
             compare origDoc path "{mod_abs}" ¬
                 target compare target new ¬
                 detect format changes false ¬
                 ignore all comparison warnings true ¬
                 add to recent files false
             delay 3
+
+            -- Reject list-numbering-only revisions to prevent
+            -- Word from renumbering lists (a,b,c -> d,e,f)
+            set compDoc to active document
+            set revList to revisions of compDoc
+            set rejectedCount to 0
+            repeat with rev in reverse of revList
+                if revision type of rev is revision paragraph number then
+                    reject rev
+                    set rejectedCount to rejectedCount + 1
+                end if
+            end repeat
+
             save as active document ¬
                 file name (POSIX file "{pdf_abs}" as text) ¬
                 file format format PDF
             delay 1
             close active document saving no
-            close document "{orig_name}" saving no
+            close document origName saving no
         end tell
         '''
 
