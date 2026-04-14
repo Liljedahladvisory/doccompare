@@ -1,6 +1,12 @@
 """DocCompare GUI — modern macOS desktop app."""
 import tkinter as tk
 from tkinter import ttk, filedialog
+
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _HAS_DND = True
+except Exception:
+    _HAS_DND = False
 import threading
 from pathlib import Path
 from datetime import datetime, date, timedelta
@@ -515,10 +521,12 @@ class DocCompareApp:
         self.orig_card, self.orig_label, self.orig_icon = self._file_card(
             outer, self._s("original_doc"), self._s("select_file"),
             self._pick_original,
+            drop_callback=self._drop_original,
         )
         self.mod_card, self.mod_label, self.mod_icon = self._file_card(
             outer, self._s("modified_doc"), self._s("select_file"),
             self._pick_modified,
+            drop_callback=self._drop_modified,
         )
         self.out_card, self.out_label, self.out_icon = self._file_card(
             outer, self._s("save_report"), self._s("choose_location"),
@@ -557,7 +565,7 @@ class DocCompareApp:
                  font=FONT_XS, bg=BG, fg=BORDER2).pack()
 
     def _file_card(self, parent, title, btn_text, command,
-                   default_text=None, optional=False):
+                   default_text=None, optional=False, drop_callback=None):
         if default_text is None:
             default_text = self._s("no_file")
         card = tk.Frame(parent, bg=BG2,
@@ -583,7 +591,51 @@ class DocCompareApp:
         icon_lbl = tk.Label(inner, text="",
                             font=("Helvetica Neue", 13), bg=BG2, fg=GREEN)
         icon_lbl.pack(side="right", padx=(0, 4))
+
+        # Register drag-and-drop if available
+        if _HAS_DND and drop_callback:
+            card.drop_target_register(DND_FILES)
+            orig_border = BORDER
+
+            def on_enter(event):
+                card.config(highlightbackground=ACCENT, highlightthickness=2)
+                return event.action
+
+            def on_leave(event):
+                # Restore border only if no file is set (icon empty)
+                if not icon_lbl.cget("text"):
+                    card.config(highlightbackground=orig_border, highlightthickness=1)
+                else:
+                    card.config(highlightthickness=1)
+                return event.action
+
+            def on_drop(event):
+                card.config(highlightthickness=1)
+                # Parse dropped file path(s) — take the first .docx
+                paths = self._parse_drop_data(event.data)
+                for p in paths:
+                    if p.suffix.lower() == ".docx":
+                        drop_callback(p)
+                        return event.action
+                return event.action
+
+            card.dnd_bind('<<DropEnter>>', on_enter)
+            card.dnd_bind('<<DropLeave>>', on_leave)
+            card.dnd_bind('<<Drop>>', on_drop)
+
         return card, file_lbl, icon_lbl
+
+    @staticmethod
+    def _parse_drop_data(data: str) -> list[Path]:
+        """Parse tkdnd drop data into a list of Path objects."""
+        paths = []
+        # tkdnd returns paths in braces if they contain spaces: {/path/to file.docx}
+        import re
+        for match in re.finditer(r'\{([^}]+)\}|(\S+)', data):
+            raw = match.group(1) or match.group(2)
+            if raw:
+                paths.append(Path(raw))
+        return paths
 
     def _display_name(self) -> str:
         return self.user_name if self.user_name else "DocCompare"
@@ -1019,11 +1071,17 @@ class DocCompareApp:
             filetypes=[(self._s("word_docs"), "*.docx")],
         )
         if path:
-            self.original_path = Path(path)
-            self.orig_label.config(text=self.original_path.name, fg=FG3)
-            self.orig_icon.config(text=ICON_CHECK)
-            self.orig_card.config(highlightbackground=ACCENT)
-            self._update_button_state()
+            self._set_original(Path(path))
+
+    def _drop_original(self, path: Path):
+        self._set_original(path)
+
+    def _set_original(self, path: Path):
+        self.original_path = path
+        self.orig_label.config(text=path.name, fg=FG3)
+        self.orig_icon.config(text=ICON_CHECK)
+        self.orig_card.config(highlightbackground=ACCENT)
+        self._update_button_state()
 
     def _pick_modified(self):
         path = filedialog.askopenfilename(
@@ -1031,11 +1089,17 @@ class DocCompareApp:
             filetypes=[(self._s("word_docs"), "*.docx")],
         )
         if path:
-            self.modified_path = Path(path)
-            self.mod_label.config(text=self.modified_path.name, fg=FG3)
-            self.mod_icon.config(text=ICON_CHECK)
-            self.mod_card.config(highlightbackground=ACCENT)
-            self._update_button_state()
+            self._set_modified(Path(path))
+
+    def _drop_modified(self, path: Path):
+        self._set_modified(path)
+
+    def _set_modified(self, path: Path):
+        self.modified_path = path
+        self.mod_label.config(text=path.name, fg=FG3)
+        self.mod_icon.config(text=ICON_CHECK)
+        self.mod_card.config(highlightbackground=ACCENT)
+        self._update_button_state()
 
     def _pick_output(self):
         path = filedialog.asksaveasfilename(
@@ -1167,7 +1231,7 @@ class DocCompareApp:
 
 
 def main():
-    root = tk.Tk()
+    root = TkinterDnD.Tk() if _HAS_DND else tk.Tk()
     root.minsize(540, 620)
     DocCompareApp(root)
     root.mainloop()
