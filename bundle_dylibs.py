@@ -172,6 +172,28 @@ if os.path.exists(boot_py):
     with open(boot_py, "r") as f:
         content = f.read()
 
+    if "DOCCOMPARE_BOOTSTRAP_SYS_PATH" not in content:
+        path_patch = '''
+# DOCCOMPARE_BOOTSTRAP_SYS_PATH
+import os as _dc_os
+import sys as _dc_sys
+_dc_sys.dont_write_bytecode = True
+_dc_resources = _dc_os.path.dirname(_dc_os.path.abspath(__file__))
+_dc_pkg_dir = _dc_os.path.join(
+    _dc_resources,
+    "lib",
+    "python%d.%d" % (_dc_sys.version_info[:2]),
+)
+for _dc_path in (_dc_pkg_dir, _dc_resources):
+    if _dc_path not in _dc_sys.path:
+        _dc_sys.path.insert(0, _dc_path)
+
+'''
+        content = path_patch + content
+        with open(boot_py, "w") as f:
+            f.write(content)
+        print("  Patched __boot__.py with Python package path setup.")
+
     if "DYLD_LIBRARY_PATH" not in content:
         # Prepend our Frameworks path to the environment
         patch = '''
@@ -218,9 +240,10 @@ if TCL_TK_BASE:
     LIB_DIR = os.path.join(APP_PATH, "Contents", "lib")
     os.makedirs(LIB_DIR, exist_ok=True)
 
-    # Find tcl and tk version directories
+    # Find tcl, tk, and tkdnd version directories
     tcl_dirs = glob.glob(os.path.join(TCL_TK_BASE, "tcl[0-9]*"))
     tk_dirs = glob.glob(os.path.join(TCL_TK_BASE, "tk[0-9]*"))
+    tkdnd_dirs = glob.glob(os.path.join(TCL_TK_BASE, "tkdnd*"))
 
     for src_dir in tcl_dirs + tk_dirs:
         dirname = os.path.basename(src_dir)
@@ -230,6 +253,23 @@ if TCL_TK_BASE:
                 shutil.rmtree(dst_dir)
             shutil.copytree(src_dir, dst_dir)
             print(f"  Copied: {dirname}/ ({sum(1 for _,_,f in os.walk(dst_dir) for _ in f)} files)")
+
+    # tkinterdnd2 bundles tkdnd 2.9.3, which can crash with Tcl/Tk 9 in the
+    # frozen app. Bundle the matching Homebrew tkdnd and load it explicitly.
+    for src_dir in tkdnd_dirs:
+        dirname = os.path.basename(src_dir)
+        dst_dir = os.path.join(LIB_DIR, dirname)
+        if os.path.isdir(src_dir):
+            if os.path.exists(dst_dir):
+                shutil.rmtree(dst_dir)
+            shutil.copytree(src_dir, dst_dir)
+            print(f"  Copied: {dirname}/ ({sum(1 for _,_,f in os.walk(dst_dir) for _ in f)} files)")
+            for dylib in glob.glob(os.path.join(dst_dir, "*.dylib")):
+                bn = os.path.basename(dylib)
+                os.chmod(dylib, 0o755)
+                subprocess.run(["install_name_tool", "-id",
+                                f"@executable_path/../lib/{dirname}/{bn}", dylib],
+                               capture_output=True)
 
     # Also copy Tcl/Tk dylibs and their dependencies (libtommath)
     tcl_dylibs = glob.glob(os.path.join(TCL_TK_BASE, "libtcl9*.dylib"))

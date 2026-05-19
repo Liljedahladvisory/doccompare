@@ -15,8 +15,8 @@
 set -euo pipefail
 
 APP_NAME="DocCompare"
-VERSION="0.1.0"
-DMG_NAME="${APP_NAME}-${VERSION}"
+VERSION="0.2.0"
+DMG_NAME="${APP_NAME}"
 BUILD_DIR="$(pwd)/build"
 DIST_DIR="$(pwd)/dist"
 PYTHON="python3.12"
@@ -78,7 +78,11 @@ python3 bundle_dylibs.py "$APP_PATH"
 # ── Step 4: Ad-hoc code sign ────────────────────────────────────────────────
 echo ""
 echo "▸ Code signing (ad-hoc)..."
-codesign --force --deep --sign - "$APP_PATH" 2>/dev/null || true
+xattr -cr "$APP_PATH" 2>/dev/null || true
+find "$APP_PATH/Contents" \( -name "*.dylib" -o -name "*.so" \) \
+    -exec codesign --force --sign - {} \; 2>/dev/null || true
+codesign --force --sign - "$APP_PATH/Contents/MacOS/python" 2>/dev/null || true
+codesign --force --deep --sign - "$APP_PATH"
 echo "  ✓ Signed"
 
 # ── Step 5: Create DMG ──────────────────────────────────────────────────────
@@ -107,15 +111,35 @@ echo "  ✓ DMG created"
 echo ""
 echo "▸ Verifying no Homebrew references remain..."
 BROKEN=0
-for dylib in "${APP_PATH}/Contents/Frameworks/"*.dylib; do
-    if otool -L "$dylib" 2>/dev/null | grep -q "/opt/homebrew"; then
-        echo "  ✗ $(basename $dylib) still references Homebrew!"
+while IFS= read -r native_lib; do
+    if otool -L "$native_lib" 2>/dev/null | grep -q "/opt/homebrew"; then
+        echo "  ✗ ${native_lib#$APP_PATH/Contents/} still references Homebrew!"
+        BROKEN=1
+    fi
+done < <(find "$APP_PATH/Contents" \( -name "*.dylib" -o -name "*.so" \))
+
+for executable in "$APP_PATH/Contents/MacOS/$APP_NAME" "$APP_PATH/Contents/MacOS/python"; do
+    if [ -f "$executable" ] && otool -L "$executable" 2>/dev/null | grep -q "/opt/homebrew"; then
+        echo "  ✗ ${executable#$APP_PATH/Contents/} still references Homebrew!"
         BROKEN=1
     fi
 done
+
 if [ $BROKEN -eq 0 ]; then
     echo "  ✓ All dylibs are self-contained"
+else
+    echo "  ✗ Native dependency verification failed"
+    exit 1
 fi
+
+echo ""
+echo "▸ Verifying bundled resources..."
+CONTENTS_LIB="$APP_PATH/Contents/lib"
+find "$CONTENTS_LIB" -maxdepth 1 -type d -name "tcl[0-9]*" | grep -q . || { echo "  ✗ Missing Tcl resources"; exit 1; }
+find "$CONTENTS_LIB" -maxdepth 1 -type d -name "tk[0-9]*" | grep -q . || { echo "  ✗ Missing Tk resources"; exit 1; }
+[ -d "$CONTENTS_LIB/tkdnd2.9.5" ] || { echo "  ✗ Missing tkdnd resources"; exit 1; }
+codesign --verify --deep --strict "$APP_PATH" 2>/dev/null || { echo "  ✗ Code signature verification failed"; exit 1; }
+echo "  ✓ Tcl/Tk, tkdnd, and code signature OK"
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 echo ""

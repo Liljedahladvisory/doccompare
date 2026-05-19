@@ -18,9 +18,11 @@ import hashlib
 import hmac as _hmac
 import base64
 import uuid
+import time
 import urllib.request
 import urllib.error
 import ssl
+from urllib.parse import unquote, urlparse
 
 # ── Config ──────────────────────────────────────────────────────────────────
 _APP_DATA = os.path.expanduser("~/.doccompare_llt")
@@ -28,6 +30,48 @@ CONFIG_PATH = os.path.expanduser("~/.doccompare_llt.json")
 LICENSE_PATH = os.path.join(_APP_DATA, "license.json")
 WEBHOOK_URL = "https://script.google.com/macros/s/AKfycbzevrhw7cJdjHZLn_OCfSR7RVSaU2hgV8RKU3hzeSkGouKYa-0ioo85eYoWkiAkHVpB/exec"
 VERIFICATION_TIMEOUT = 600  # 10 min
+
+
+def _debug_log(message: str):
+    try:
+        os.makedirs(_APP_DATA, exist_ok=True)
+        with open(os.path.join(_APP_DATA, "debug.log"), "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now().isoformat()} {message}\n")
+    except Exception:
+        pass
+
+
+def _bundled_tkdnd_dir() -> Path | None:
+    """Return the Tcl/Tk 9-compatible tkdnd directory bundled in the .app."""
+    if getattr(sys, "frozen", None) != "macosx_app":
+        return None
+    resource_path = os.environ.get("RESOURCEPATH")
+    if not resource_path:
+        return None
+    contents_dir = Path(resource_path).resolve().parent
+    lib_dir = contents_dir / "lib"
+    candidates = sorted(lib_dir.glob("tkdnd*"), reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _enable_drag_and_drop(root: tk.Tk):
+    """Load tkdnd after Tk exists so py2app/Tk startup remains stable."""
+    global _HAS_DND
+    if not _HAS_DND:
+        _debug_log("tkdnd unavailable: tkinterdnd2 import failed")
+        return
+    try:
+        tkdnd_dir = _bundled_tkdnd_dir()
+        if tkdnd_dir and tkdnd_dir.is_dir():
+            auto_path = root.tk.call("set", "auto_path")
+            root.tk.call("set", "auto_path",
+                         root.tk.call("linsert", auto_path, 0, str(tkdnd_dir)))
+            _debug_log(f"tkdnd auto_path added: {tkdnd_dir}")
+        version = TkinterDnD._require(root)
+        _debug_log(f"tkdnd loaded: {version}")
+    except Exception as e:
+        _HAS_DND = False
+        _debug_log(f"tkdnd disabled: {type(e).__name__}: {e}")
 
 # HMAC secret for license signing (same pattern as Meeting Recorder LLT)
 _LICENSE_HMAC_SECRET = bytes.fromhex(
@@ -166,15 +210,21 @@ STRINGS = {
         "desktop_auto":        "Skrivbordet — automatiskt filnamn",
         "optional":            "valfritt",
         "compare_btn":         "Jämför dokument",
+        "reset_btn":           "Nollställ",
         "comparing":           "Jämför dokument\u2026",
+        "word_processing":     "Microsoft Word bearbetar dokumenten\u2026 större filer kan ta någon minut.",
+        "still_working":       "Fortfarande igång\u2026 dokumenten är lite tyngre än vanligt.",
         "rendering":           "Renderar PDF\u2026",
         "done":                "Klart! Rapport sparad: {filename}",
+        "reset_done":          "Välj nya dokument för nästa jämförelse.",
+        "structure_changes":   "{count} ändring(ar) i sidhuvud/sidfot",
         "added":               "tillagda",
         "deleted":             "borttagna",
         "unchanged":           "oförändrade",
         "error_prefix":        "Fel",
         "format_mismatch":     "Båda filerna måste vara samma format ({ext1} \u2260 {ext2})",
         "format_unsupported":  "Format stöds ej: {ext}",
+        "file_not_found":      "Filen hittades inte: {files}",
         "not_verified":        "Programmet är inte aktiverat. Starta om och verifiera din e-post.",
         "verify_first":        "Verifiera din e-post först.",
         "settings_title":      "Inställningar",
@@ -198,15 +248,21 @@ STRINGS = {
         "desktop_auto":        "Desktop — automatic filename",
         "optional":            "optional",
         "compare_btn":         "Compare Documents",
+        "reset_btn":           "Reset",
         "comparing":           "Comparing documents\u2026",
+        "word_processing":     "Microsoft Word is processing the documents\u2026 larger files can take a minute.",
+        "still_working":       "Still working\u2026 these documents are a little heavier than usual.",
         "rendering":           "Rendering PDF\u2026",
         "done":                "Done! Report saved: {filename}",
+        "reset_done":          "Select new documents for the next comparison.",
+        "structure_changes":   "{count} header/footer change(s)",
         "added":               "added",
         "deleted":             "deleted",
         "unchanged":           "unchanged",
         "error_prefix":        "Error",
         "format_mismatch":     "Both files must be the same format ({ext1} \u2260 {ext2})",
         "format_unsupported":  "Unsupported format: {ext}",
+        "file_not_found":      "File not found: {files}",
         "not_verified":        "App not activated. Restart and verify your email.",
         "verify_first":        "Verify your email first.",
         "settings_title":      "Settings",
@@ -439,6 +495,8 @@ class DocCompareApp:
         self.original_path: Path | None = None
         self.modified_path: Path | None = None
         self.output_path: Path | None = None
+        self._comparison_running = False
+        self._comparison_status_jobs = []
 
         _style_widgets()
         self._build_ui()
@@ -509,7 +567,7 @@ class DocCompareApp:
         badge_frame = tk.Frame(title_frame, bg=BG3, padx=8, pady=2,
                                highlightbackground=BORDER, highlightthickness=1)
         badge_frame.pack(side="left", padx=(12, 0), pady=(8, 0))
-        tk.Label(badge_frame, text="v0.1", font=FONT_MS, bg=BG3,
+        tk.Label(badge_frame, text="v0.2.0", font=FONT_MS, bg=BG3,
                  fg=ACCENT).pack()
 
         tk.Label(outer, text=self._s("subtitle"),
@@ -545,6 +603,14 @@ class DocCompareApp:
             state="disabled", fixed_width=536,
         )
         self.compare_btn.pack(fill="x")
+        self.reset_btn = RoundedButton(
+            btn_frame, text=self._s("reset_btn"),
+            command=self._reset_comparison,
+            style="ghost", bg=BG, fg=FG2, font_spec=FONT_S,
+            padx=28, pady=9, radius=8,
+            state="disabled", fixed_width=536,
+        )
+        self.reset_btn.pack(fill="x", pady=(8, 0))
 
         # ── Progress + status ────────────────────────────────────────────
         self.progress = ttk.Progressbar(
@@ -1077,6 +1143,7 @@ class DocCompareApp:
         self._set_original(path)
 
     def _set_original(self, path: Path):
+        path = self._normalize_path(path)
         self.original_path = path
         self.orig_label.config(text=path.name, fg=FG3)
         self.orig_icon.config(text=ICON_CHECK)
@@ -1095,6 +1162,7 @@ class DocCompareApp:
         self._set_modified(path)
 
     def _set_modified(self, path: Path):
+        path = self._normalize_path(path)
         self.modified_path = path
         self.mod_label.config(text=path.name, fg=FG3)
         self.mod_icon.config(text=ICON_CHECK)
@@ -1113,12 +1181,20 @@ class DocCompareApp:
             self.out_label.config(text=self.output_path.name, fg=FG3)
             self.out_icon.config(text=ICON_CHECK)
             self.out_card.config(highlightbackground=ACCENT)
+            self._update_button_state()
 
     # ── Button state ─────────────────────────────────────────────────────
 
     def _update_button_state(self):
+        can_reset = bool(self.original_path or self.modified_path or self.output_path)
+        self._set_reset_enabled(can_reset and not self._comparison_running)
+
         if not self._verified:
             self.status_label.config(text=self._s("not_verified"), fg=RED)
+            self.compare_btn.config(state="disabled")
+            return
+
+        if self._comparison_running:
             self.compare_btn.config(state="disabled")
             return
 
@@ -1130,6 +1206,14 @@ class DocCompareApp:
             return
 
         if self.original_path and self.modified_path:
+            missing = [p.name for p in (self.original_path, self.modified_path) if not p.exists()]
+            if missing:
+                self.status_label.config(
+                    text=f"{self._s('error_prefix')}: {self._s('file_not_found', files=', '.join(missing))}",
+                    fg=RED,
+                )
+                self.compare_btn.config(state="disabled")
+                return
             ext1 = self.original_path.suffix.lower()
             ext2 = self.modified_path.suffix.lower()
             if ext1 != ext2:
@@ -1147,9 +1231,54 @@ class DocCompareApp:
         else:
             self.compare_btn.config(state="disabled")
 
+    def _set_reset_enabled(self, enabled: bool):
+        if hasattr(self, "reset_btn"):
+            self.reset_btn.config(state="normal" if enabled else "disabled")
+
+    def _cancel_comparison_status_jobs(self):
+        for job in getattr(self, "_comparison_status_jobs", []):
+            try:
+                self.root.after_cancel(job)
+            except Exception:
+                pass
+        self._comparison_status_jobs = []
+
+    def _reset_comparison(self):
+        if self._comparison_running:
+            return
+        self._cancel_comparison_status_jobs()
+        self.progress.stop()
+
+        self.original_path = None
+        self.modified_path = None
+        self.output_path = None
+
+        self.orig_label.config(text=self._s("no_file"), fg=FG_DIM)
+        self.mod_label.config(text=self._s("no_file"), fg=FG_DIM)
+        self.out_label.config(text=self._s("desktop_auto"), fg=FG_DIM)
+        for card, icon in (
+            (self.orig_card, self.orig_icon),
+            (self.mod_card, self.mod_icon),
+            (self.out_card, self.out_icon),
+        ):
+            icon.config(text="")
+            card.config(highlightbackground=BORDER, highlightthickness=1)
+
+        self.status_label.config(text=self._s("reset_done"), fg=FG_DIM)
+        _debug_log("comparison reset")
+        self._update_button_state()
+
     def _default_output(self) -> Path:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         return Path.home() / "Desktop" / f"comparison_{ts}.pdf"
+
+    @staticmethod
+    def _normalize_path(path: Path) -> Path:
+        raw = str(path)
+        if raw.startswith("file://"):
+            parsed = urlparse(raw)
+            return Path(unquote(parsed.path))
+        return Path(unquote(raw))
 
     # ── Comparison logic ─────────────────────────────────────────────────
 
@@ -1164,11 +1293,28 @@ class DocCompareApp:
             return
 
         self.compare_btn.config(state="disabled")
+        self._comparison_running = True
+        self._set_reset_enabled(False)
         self.progress.start(12)
         output = self.output_path or self._default_output()
+        started = time.perf_counter()
+        _debug_log(
+            "comparison start "
+            f"original={self.original_path} modified={self.modified_path} output={output}"
+        )
+
+        self._comparison_status_jobs = [
+            self.root.after(12000, lambda: self.status_label.config(
+                text=self._s("word_processing"), fg=FG_DIM)),
+            self.root.after(45000, lambda: self.status_label.config(
+                text=self._s("still_working"), fg=FG_DIM)),
+        ]
 
         def set_status(msg):
             self.root.after(0, lambda: self.status_label.config(text=msg, fg=FG_DIM))
+
+        def elapsed() -> str:
+            return f"{time.perf_counter() - started:.1f}s"
 
         def worker():
             try:
@@ -1178,13 +1324,16 @@ class DocCompareApp:
                 adapter = get_adapter()
                 if adapter:
                     set_status(self._s("comparing"))
+                    _debug_log(f"comparison adapter start ({adapter.__class__.__name__}) at {elapsed()}")
                     try:
                         summary = adapter.compare_and_export(
                             self.original_path, self.modified_path, output,
                             original_name=self.original_path.name,
                             modified_name=self.modified_path.name,
                         )
-                    except RuntimeError:
+                        _debug_log(f"comparison adapter success at {elapsed()}")
+                    except RuntimeError as e:
+                        _debug_log(f"comparison adapter fallback at {elapsed()}: {e}")
                         summary = None  # fall through to fallback
 
                 if summary is None:
@@ -1192,16 +1341,20 @@ class DocCompareApp:
                     from doccompare.rendering.pdf_pipeline import produce_pdf
 
                     set_status(self._s("comparing"))
+                    _debug_log(f"comparison ooxml start at {elapsed()}")
                     doc_tree, summary = ooxml_compare(
                         self.original_path, self.modified_path, None,
                     )
+                    _debug_log(f"comparison ooxml done at {elapsed()}")
                     set_status(self._s("rendering"))
+                    _debug_log(f"comparison pdf render start at {elapsed()}")
                     produce_pdf(
                         doc_tree, output, summary,
                         original_name=self.original_path.name,
                         modified_name=self.modified_path.name,
                         docx_path=self.modified_path,
                     )
+                    _debug_log(f"comparison pdf render done at {elapsed()}")
 
                 s = summary
                 msg = (
@@ -1210,31 +1363,68 @@ class DocCompareApp:
                     f"\u2212{s.get('deleted_words', 0)} {self._s('deleted')}  "
                     f"{s.get('unchanged_words', 0)} {self._s('unchanged')}"
                 )
-                self.root.after(0, lambda: self._on_success(msg, output))
+                structure_count = len(s.get("structure_changes") or [])
+                if structure_count:
+                    msg += "\n" + self._s("structure_changes", count=structure_count)
+                _debug_log(f"comparison success at {elapsed()} output_exists={output.exists()}")
+                self.root.after(0, lambda: (self._cancel_comparison_status_jobs(), self._on_success(msg, output)))
             except Exception as e:
-                self.root.after(0, lambda: self._on_error(str(e)))
+                _debug_log(f"comparison error at {elapsed()}: {type(e).__name__}: {e}")
+                self.root.after(0, lambda: (self._cancel_comparison_status_jobs(), self._on_error(str(e))))
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_success(self, msg: str, output: Path):
         self.progress.stop()
+        self._comparison_running = False
         self.status_label.config(text=msg, fg=GREEN)
         self.compare_btn.config(state="normal")
+        self._set_reset_enabled(True)
         import subprocess
-        subprocess.run(["open", str(output)])
+        subprocess.Popen(["open", str(output)])
 
     def _on_error(self, error: str):
         self.progress.stop()
+        self._comparison_running = False
         self.status_label.config(
             text=f"{self._s('error_prefix')}: {error}", fg=RED)
         self.compare_btn.config(state="normal")
+        self._set_reset_enabled(True)
 
 
 def main():
-    root = TkinterDnD.Tk() if _HAS_DND else tk.Tk()
+    _debug_log("gui.main creating root")
+    root = tk.Tk()
+    _enable_drag_and_drop(root)
     root.minsize(540, 620)
+    root.report_callback_exception = lambda exc, val, tb: _debug_log(f"tk callback exception: {exc.__name__}: {val}")
+
+    def _show_root():
+        try:
+            root.deiconify()
+            root.lift()
+            root.focus_force()
+            root.after(250, lambda: root.attributes("-topmost", False))
+            root.attributes("-topmost", True)
+            _debug_log("root shown")
+        except Exception as e:
+            _debug_log(f"root show failed: {e}")
+
+    def _ignore_mac_quit():
+        _debug_log("ignored macOS quit event")
+        _show_root()
+
+    try:
+        root.createcommand("tk::mac::Quit", _ignore_mac_quit)
+        root.createcommand("tk::mac::ReopenApplication", _show_root)
+    except tk.TclError as e:
+        _debug_log(f"macOS Tk command setup skipped: {e}")
+
     DocCompareApp(root)
+    root.after(300, _show_root)
+    _debug_log("gui.main entering mainloop")
     root.mainloop()
+    _debug_log("gui.main mainloop returned")
 
 
 if __name__ == "__main__":

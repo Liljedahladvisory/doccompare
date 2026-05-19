@@ -15,6 +15,8 @@ import os
 from lxml import etree
 from loguru import logger
 
+from doccompare.comparison.structure_changes import detect_header_footer_changes
+
 
 # ── Abstract adapter ────────────────────────────────────────────────────
 
@@ -75,11 +77,17 @@ class MacWordAdapter(ComparisonAdapter):
         comparison_pdf = temp_dir / f"comparison_{os.getpid()}.pdf"
 
         try:
+            structure_changes = detect_header_footer_changes(original, modified)
+            if structure_changes:
+                return self._compare_with_ooxml_footer_revisions(
+                    original, modified, output_pdf, original_name, modified_name)
+
             # Step 1: Run Word comparison + PDF export
             self._run_compare_script(original, modified, comparison_pdf)
 
             # Step 2: Calculate summary from source documents
             summary = self._extract_summary(original, modified)
+            summary["structure_changes"] = []
 
             # Step 3: Render summary/legend page
             summary_bytes = _render_summary_pdf(
@@ -94,6 +102,29 @@ class MacWordAdapter(ComparisonAdapter):
 
         finally:
             comparison_pdf.unlink(missing_ok=True)
+
+    def _compare_with_ooxml_footer_revisions(
+        self,
+        original: Path,
+        modified: Path,
+        output_pdf: Path,
+        original_name: str,
+        modified_name: str,
+    ) -> dict:
+        """Use OOXML track changes when header/footer revisions are needed."""
+        from doccompare.comparison.ooxml_engine import compare as ooxml_compare
+        from doccompare.rendering.pdf_pipeline import produce_pdf
+
+        doc_tree, summary = ooxml_compare(original, modified, None)
+        produce_pdf(
+            doc_tree,
+            output_pdf,
+            summary,
+            original_name=original_name,
+            modified_name=modified_name,
+            docx_path=modified,
+        )
+        return summary
 
     def _run_compare_script(
         self, original: Path, modified: Path, output_pdf: Path,

@@ -8,6 +8,15 @@ Build the .app bundle:
 The resulting app will be in dist/DocCompare.app
 """
 from setuptools import setup
+from py2app.build_app import py2app
+
+
+class DocComparePy2App(py2app):
+    """py2app requires dependencies to be preinstalled, not install_requires."""
+
+    def finalize_options(self):
+        self.distribution.install_requires = []
+        super().finalize_options()
 
 APP = ['src/doccompare/app.py']
 DATA_FILES = [
@@ -57,9 +66,11 @@ OPTIONS = {
         'CFBundleName': 'DocCompare',
         'CFBundleDisplayName': 'DocCompare',
         'CFBundleIdentifier': 'se.liljedahladvisory.doccompare',
-        'CFBundleVersion': '0.1.0',
-        'CFBundleShortVersionString': '0.1.0',
+        'CFBundleVersion': '0.2.0',
+        'CFBundleShortVersionString': '0.2.0',
         'NSHighResolutionCapable': True,
+        'NSSupportsAutomaticTermination': False,
+        'NSSupportsSuddenTermination': False,
         'NSHumanReadableCopyright': '\u00a9 2025 Liljedahl Advisory AB',
         'LSMinimumSystemVersion': '12.0',
     },
@@ -71,4 +82,5 @@ setup(
     app=APP,
     data_files=DATA_FILES,
     options={'py2app': OPTIONS},
+    cmdclass={'py2app': DocComparePy2App},
 )

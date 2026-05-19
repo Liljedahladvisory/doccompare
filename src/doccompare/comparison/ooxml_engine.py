@@ -23,6 +23,8 @@ from lxml import etree
 from rapidfuzz import fuzz
 import diff_match_patch as dmp_module
 
+from doccompare.comparison.structure_changes import detect_header_footer_changes
+
 # ── OOXML namespaces ────────────────────────────────────────────────────
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
@@ -41,6 +43,9 @@ W_R = _qn("w:r")
 W_T = _qn("w:t")
 W_RPR = _qn("w:rPr")
 W_PPR = _qn("w:pPr")
+W_COLOR = _qn("w:color")
+W_U = _qn("w:u")
+W_STRIKE = _qn("w:strike")
 W_TBL = _qn("w:tbl")
 W_TR = _qn("w:tr")
 W_TC = _qn("w:tc")
@@ -54,6 +59,7 @@ W_SDT_CONTENT = _qn("w:sdtContent")
 W_HYPERLINK = _qn("w:hyperlink")
 W_BOOKMARK_START = _qn("w:bookmarkStart")
 W_BOOKMARK_END = _qn("w:bookmarkEnd")
+_HEADER_FOOTER_RE = re.compile(r"^word/(header|footer)\d+\.xml$")
 
 
 # ── Revision-ID generator ──────────────────────────────────────────────
@@ -132,10 +138,15 @@ def compare(
 
     # 6. Compute summary from the modified XML
     summary = _compute_summary(new_tree)
+    summary["structure_changes"] = detect_header_footer_changes(old_path, new_path)
+    extra_parts = _build_header_footer_revision_parts(
+        old_path, new_path, author, date, rid)
+    if extra_parts:
+        summary["_extra_parts"] = extra_parts
 
     # 7. Optionally write output .docx
     if output_path:
-        _write_docx(new_path, output_path, new_tree)
+        _write_docx(new_path, output_path, new_tree, extra_parts=extra_parts)
 
     return new_tree, summary
 
@@ -146,18 +157,127 @@ def _read_doc_xml(path: Path) -> etree._Element:
         return etree.fromstring(zf.read("word/document.xml"))
 
 
-def _write_docx(template: Path, output: Path, doc_tree: etree._Element):
+def _write_docx(
+    template: Path,
+    output: Path,
+    doc_tree: etree._Element,
+    extra_parts: dict[str, bytes] | None = None,
+):
     """Copy template .docx, replacing document.xml with modified tree."""
     xml_bytes = etree.tostring(
         doc_tree, xml_declaration=True, encoding="UTF-8", standalone=True,
     )
+    extra_parts = extra_parts or {}
     with zipfile.ZipFile(template, "r") as zin:
         with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zout:
             for item in zin.infolist():
                 if item.filename == "word/document.xml":
                     zout.writestr(item, xml_bytes)
+                elif item.filename in extra_parts:
+                    zout.writestr(item, extra_parts[item.filename])
                 else:
                     zout.writestr(item, zin.read(item.filename))
+
+
+def _build_header_footer_revision_parts(
+    old_path: Path,
+    new_path: Path,
+    author: str,
+    date: str,
+    rid: _RevId,
+) -> dict[str, bytes]:
+    """Create revised header/footer XML parts from the modified document."""
+    patched: dict[str, bytes] = {}
+    with zipfile.ZipFile(new_path, "r") as new_zip:
+        new_names = [n for n in new_zip.namelist() if _HEADER_FOOTER_RE.match(n)]
+        with zipfile.ZipFile(old_path, "r") as old_zip:
+            old_names = set(old_zip.namelist())
+            for name in new_names:
+                new_bytes = new_zip.read(name)
+                old_bytes = old_zip.read(name) if name in old_names else None
+                if old_bytes == new_bytes:
+                    continue
+
+                new_tree = etree.fromstring(new_bytes)
+                if old_bytes is None:
+                    _mark_header_footer_inserted(new_tree, author, date, rid)
+                else:
+                    old_tree = etree.fromstring(old_bytes)
+                    _diff_header_footer_tree(old_tree, new_tree, author, date, rid)
+
+                _style_header_footer_revisions(new_tree)
+                patched[name] = etree.tostring(
+                    new_tree,
+                    xml_declaration=True,
+                    encoding="UTF-8",
+                    standalone=True,
+                )
+    return patched
+
+
+def _mark_header_footer_inserted(
+    tree: etree._Element,
+    author: str,
+    date: str,
+    rid: _RevId,
+):
+    for para in tree.iter(W_P):
+        _mark_para_inserted(para, author, date, rid)
+
+
+def _diff_header_footer_tree(
+    old_tree: etree._Element,
+    new_tree: etree._Element,
+    author: str,
+    date: str,
+    rid: _RevId,
+):
+    old_paras = list(old_tree.iter(W_P))
+    new_paras = list(new_tree.iter(W_P))
+    for i in range(min(len(old_paras), len(new_paras))):
+        _diff_para(old_paras[i], new_paras[i], author, date, rid)
+    for para in new_paras[len(old_paras):]:
+        _mark_para_inserted(para, author, date, rid)
+
+
+def _style_header_footer_revisions(tree: etree._Element):
+    """Make header/footer revisions visibly marked even if Word hides markup."""
+    for ins in tree.iter(W_INS):
+        for run in ins.iter(W_R):
+            _style_run_as_added(run)
+    for deletion in tree.iter(W_DEL):
+        for run in deletion.iter(W_R):
+            _style_run_as_deleted(run)
+
+
+def _style_run_as_added(run: etree._Element):
+    rpr = _ensure_run_properties(run)
+    _set_rpr_child(rpr, W_COLOR, {_qn("w:val"): "2E97D3"})
+    _set_rpr_child(rpr, W_U, {_qn("w:val"): "single"})
+
+
+def _style_run_as_deleted(run: etree._Element):
+    rpr = _ensure_run_properties(run)
+    _set_rpr_child(rpr, W_COLOR, {_qn("w:val"): "B5082E"})
+    _set_rpr_child(rpr, W_STRIKE, {_qn("w:val"): "true"})
+
+
+def _ensure_run_properties(run: etree._Element) -> etree._Element:
+    rpr = run.find(W_RPR)
+    if rpr is None:
+        rpr = etree.Element(W_RPR)
+        run.insert(0, rpr)
+    return rpr
+
+
+def _set_rpr_child(rpr: etree._Element, tag: str, attrs: dict):
+    for child in list(rpr):
+        if child.tag == tag:
+            rpr.remove(child)
+    elem = etree.SubElement(rpr, tag)
+    for key, value in attrs.items():
+        elem.set(key, value)
+    return elem
 
 
 # ── Summary computation ─────────────────────────────────────────────────
