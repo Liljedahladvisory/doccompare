@@ -101,7 +101,26 @@ def save_config(cfg: dict):
 # ── License system ─────────────────────────────────────────────────────────
 
 def _get_machine_id() -> str:
-    """Get a stable machine identifier."""
+    """Get a stable machine identifier.
+
+    On macOS we use the hardware UUID from ioreg, which is permanent and
+    survives OS reinstalls. uuid.getnode() is unreliable — Python falls back
+    to random values when it can't find a hardware MAC address.
+    """
+    if sys.platform == "darwin":
+        try:
+            import subprocess
+            out = subprocess.run(
+                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in out.stdout.splitlines():
+                if "IOPlatformUUID" in line:
+                    parts = line.split('"')
+                    if len(parts) >= 4:
+                        return parts[3]
+        except Exception:
+            pass
     try:
         return str(uuid.getnode())
     except Exception:
