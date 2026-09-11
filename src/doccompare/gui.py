@@ -1,4 +1,5 @@
 """DocCompare GUI — modern macOS desktop app."""
+from doccompare import APP_VERSION
 import tkinter as tk
 from tkinter import ttk, filedialog
 
@@ -236,7 +237,7 @@ STRINGS = {
         "rendering":           "Renderar PDF\u2026",
         "done":                "Klart! Rapport sparad: {filename}",
         "reset_done":          "Välj nya dokument för nästa jämförelse.",
-        "structure_changes":   "{count} ändring(ar) i sidhuvud/sidfot",
+        "structure_changes":   "{count} ändring(ar) i sidhuvud, sidfot eller noter",
         "added":               "tillagda",
         "deleted":             "borttagna",
         "unchanged":           "oförändrade",
@@ -274,7 +275,7 @@ STRINGS = {
         "rendering":           "Rendering PDF\u2026",
         "done":                "Done! Report saved: {filename}",
         "reset_done":          "Select new documents for the next comparison.",
-        "structure_changes":   "{count} header/footer change(s)",
+        "structure_changes":   "{count} header, footer or note change(s)",
         "added":               "added",
         "deleted":             "deleted",
         "unchanged":           "unchanged",
@@ -500,7 +501,7 @@ class RoundedButton(tk.Canvas):
 class DocCompareApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("DocCompare")
+        self.root.title("DocCompare Preview" if os.environ.get("DOCCOMPARE_PREVIEW") else "DocCompare")
         self.root.resizable(True, True)
         self.root.configure(bg=BG)
         self.root.geometry("600x700")
@@ -586,7 +587,7 @@ class DocCompareApp:
         badge_frame = tk.Frame(title_frame, bg=BG3, padx=8, pady=2,
                                highlightbackground=BORDER, highlightthickness=1)
         badge_frame.pack(side="left", padx=(12, 0), pady=(8, 0))
-        tk.Label(badge_frame, text="v0.2.0", font=FONT_MS, bg=BG3,
+        tk.Label(badge_frame, text=f"v{APP_VERSION}", font=FONT_MS, bg=BG3,
                  fg=ACCENT).pack()
 
         tk.Label(outer, text=self._s("subtitle"),
@@ -1337,50 +1338,17 @@ class DocCompareApp:
 
         def worker():
             try:
-                from doccompare.comparison.adapters import get_adapter
+                from doccompare.comparison.service import compare_documents
 
-                summary = None
-                adapter = get_adapter()
-                if adapter:
-                    set_status(self._s("comparing"))
-                    _debug_log(f"comparison adapter start ({adapter.__class__.__name__}) at {elapsed()}")
-                    try:
-                        summary = adapter.compare_and_export(
-                            self.original_path, self.modified_path, output,
-                            original_name=self.original_path.name,
-                            modified_name=self.modified_path.name,
-                        )
-                        _debug_log(f"comparison adapter success at {elapsed()}")
-                    except RuntimeError as e:
-                        _debug_log(f"comparison adapter fallback at {elapsed()}: {e}")
-                        summary = None  # fall through to fallback
-
-                if summary is None:
-                    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-                    from doccompare.rendering.pdf_pipeline import produce_pdf
-
-                    set_status(self._s("comparing"))
-                    _debug_log(f"comparison ooxml start at {elapsed()}")
-                    doc_tree, summary = ooxml_compare(
-                        self.original_path, self.modified_path, None,
-                    )
-                    _debug_log(f"comparison ooxml done at {elapsed()}")
-                    set_status(self._s("rendering"))
-                    _debug_log(f"comparison pdf render start at {elapsed()}")
-                    produce_pdf(
-                        doc_tree, output, summary,
-                        original_name=self.original_path.name,
-                        modified_name=self.modified_path.name,
-                        docx_path=self.modified_path,
-                    )
-                    _debug_log(f"comparison pdf render done at {elapsed()}")
-
+                summary = compare_documents(
+                    self.original_path, self.modified_path, output,
+                    progress=set_status,
+                )
                 s = summary
                 msg = (
                     f"{self._s('done', filename=output.name)}\n"
                     f"+{s.get('added_words', 0)} {self._s('added')}  "
-                    f"\u2212{s.get('deleted_words', 0)} {self._s('deleted')}  "
-                    f"{s.get('unchanged_words', 0)} {self._s('unchanged')}"
+                    f"\u2212{s.get('deleted_words', 0)} {self._s('deleted')}"
                 )
                 structure_count = len(s.get("structure_changes") or [])
                 if structure_count:
@@ -1389,7 +1357,7 @@ class DocCompareApp:
                 self.root.after(0, lambda: (self._cancel_comparison_status_jobs(), self._on_success(msg, output)))
             except Exception as e:
                 _debug_log(f"comparison error at {elapsed()}: {type(e).__name__}: {e}")
-                self.root.after(0, lambda: (self._cancel_comparison_status_jobs(), self._on_error(str(e))))
+                self.root.after(0, lambda error=str(e): (self._cancel_comparison_status_jobs(), self._on_error(error)))
 
         threading.Thread(target=worker, daemon=True).start()
 

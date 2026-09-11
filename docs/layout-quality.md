@@ -1,0 +1,45 @@
+# Exportkedja 0.3.0a1: lokal provversion
+
+Status 2026-09-11: den ombyggda motorn är implementerad och provad mot Microsoft Word 16.112 på macOS. Den ordinarie installerade appen har inte ersatts. Inga ändringar har publicerats i GitHub eller distribuerats till andra användare.
+
+## Implementerat
+
+- Gemensam tjänst för GUI, CLI och befintlig adapterfasad.
+- Native Word-jämförelse med formatändringar, utan att avvisa numreringsrevisioner.
+- Unika arbetskopior inom Office-sandboxen, lås mellan DocCompare-jobb och avgränsad stängning av arbetskopior.
+- Tillfällig, enhetlig markering av tillägg, borttagningar, flyttar och format. Tolv Word-inställningar återställs efter körningen.
+- Word genererar accepterade och avvisade kontrollkopior. Projektionerna jämförs med källornas text, stycke-/rad-/cellgränser, fältinstruktioner, länkmål och refererade bilders innehåll.
+- Statistik från samma revisioner som ligger bakom dokumentet. Den gamla separata approximativa ordjämförelsen används inte.
+- Svensk bilaga efter dokumentet. PDF-sidornas storlek och innehållsströmmar kontrolleras efter sammanfogning.
+- Atomiskt byte av resultatfilen efter lyckad kontroll. Fel ger inget tyst byte av renderingsmotor.
+- GUI:s fördröjda felmeddelande behåller undantagstexten även efter att arbetartråden lämnat sin exception-handler.
+
+## Verifiering
+
+Slutkörningen gav **47 godkända tester på 68,77 sekunder**: 32 ordinarie tester och 15 opt-in-tester som styr riktig Word. Nativefallen omfattar oförändrat dokument, ordbyte, tillagd och borttagen tabellrad, ändrat sidhuvud, ändrad sidfot, teckenformat, tillagt och borttaget stycke, tillagd numrerad punkt, lång ersättningstext, ändrad fotnot, bibehållen bild, ändrad bild och bibehållen hyperlänk.
+
+Feltester kontrollerar att tidigare resultat lämnas orört vid fel i Word, projektionskontroll, bilagerendering och sammanfogning. Andra tester kontrollerar låsning, strängescaping, fältresultat, tabbar, befintliga revisioner och GUI:s felcallback.
+
+Det extraherade leveransarkivet kontrollerades med `codesign --verify --deep --strict`. Dess egen inbäddade Python och dess paketerade moduler har producerat den levererade prov-PDF:en. En separat kontroll visade att listan över öppna Word-dokument och samtliga tolv berörda visningsinställningar var desamma före och efter körningen.
+
+Prov-PDF:ens dokumentsidor och bilaga har renderats för visuell kontroll. Även borttagna tabellrader och ändrad listnumrering har granskats visuellt. Den exakta leverans-PDF:en har öppnats i Förhandsvisning.
+
+**GUI-begränsning:** appfönstret startar och ritas korrekt. Hela flödet med filval, jämförelseknapp och automatisk PDF-öppning har inte verifierats genom UI-verktyget; dess klick/tangentbord kunde inte aktivera Tk-filväljaren. Detta bevisar inte ett fel i filväljaren, men räknas inte heller som ett godkänt UI-test. Arbetartrådens felhantering är separat automatiskt testad.
+
+## ckglib-granskning
+
+Före ändring kartlades `produce_pdf`, `_diff_para` och `MacWordAdapter.compare_and_export`. GUI:s och CLI:s dynamiska adapteranrop lästes också manuellt. Efter ändring kartlade `validate-diff service.compare_documents --depth 3 --include-tests` den nya tjänsten och dess anrop från GUI, CLI, adapter och tester; de fem analyserade anropskanterna hade hög säkerhet.
+
+ckglib markerade nya hjälparmoduler, dokumentation, versionsfiler och paketeringsskript utanför den bakåtriktade anropsplanen. Dessa är uttryckliga delar av ändringen och granskades manuellt. Detta är alltså en granskad avvikelse från planens filurval, inte en automatiskt helt grön blast-radius-kontroll. Den gamla OOXML-/HTML-motorn har medvetet lämnats utanför den aktiva kedjan.
+
+## Före ordinarie release
+
+1. Kör hela klickflödet manuellt i provappen på denna Mac och på en ren testinstallation, inklusive Automation-tillstånd och normal licenskontroll.
+2. Godkänn ett representativt referensbibliotek från verksamheten: bland annat flernivånumrering, innehållsförteckning, korsreferenser, avsnitt med olika sidhuvuden/sidorientering, tabellkolumner och sammanslagna celler, flyttar och långa avtalspar.
+3. Bygg ut projektionskontrollen för numreringssemantik, stil-arv och positionsberoende innehåll. Nuvarande kontroll verifierar inte all formatering eller att ett visst sidhuvud är kopplat till rätt avsnitt.
+4. Bestäm uttrycklig policy för dokument som redan innehåller revisioner, kommentarer, formulär och inbäddade objekt. Redan spårade ändringar och OLE/altChunk stoppas i denna version.
+5. Gör en ren, låst releasebyggnad och normal signering/notarisering. Den lokala piloten återanvänder beroenderuntime från den installerade DocCompare-appen; den är inte en reproducerbar releasebyggnad.
+
+## Lokal pilot
+
+`scripts/build_local_preview.py` bygger ett separat ZIP-arkiv med **DocCompare Preview.app** från angiven befintlig runtime. Den ändrar inte `/Applications/DocCompare.app`. Signering sker i systemets tillfälliga lokala katalog eftersom FileProvider/iCloud återlägger Finder-metadata på appkataloger under Documents. Arkivet innehåller en lokalt ad hoc-signerad provapp, utan Apple-notarisering. Packa upp piloten i en lokal katalog, exempelvis Hämtade filer. Piloten använder befintlig lokal licens och språkinställning; dokumenten behandlas lokalt av Word.
