@@ -568,7 +568,7 @@ class DocCompareApp:
             self._brand_logo_image = ImageTk.PhotoImage(logo, master=self.root)
         self._logo_name_lbl = tk.Label(
             name_row, image=self._brand_logo_image,
-            bg=FG, padx=8, pady=4, borderwidth=0, highlightthickness=0)
+            bg=BG, padx=8, pady=4, borderwidth=0, highlightthickness=0)
         self._logo_name_lbl.pack(side="left")
 
         right = tk.Frame(header, bg=BG)

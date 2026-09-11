@@ -67,3 +67,7 @@ Den lokala installationen använder namnet DocCompare och det ordinarie bundle-i
 Sidhuvudet visar nu Liljedahl Advisorys logotypbild i stället för det konfigurerade kontonamnet. Bilden kommer från webbprojektets `public/images/liljedahl-logo.png` och återges oförvrängd mot en mörk yta för kontrast. Kontonamn och språk finns kvar i inställningarna; ändring av namn ersätter inte logotypen. Logotypen paketeras i både wheel och macOS-app.
 
 32 ordinarie tester godkändes (15 Word-tester inte omkörda för denna GUI-ändring). Den installerade appens signatur och källfiler kontrollerades och logotypen granskades i huvudfönstret med versionsmärkning 0.3.0a5. ckglib granskade GUI-ändringen; bildfilen, paketeringsraden och versionshöjningarna utanför anropsplanen är uttryckliga delar av ändringen. Startmodulen behåller sitt gränssnitt och behöver ingen ändring.
+
+## Logotypbakgrund 0.3.0a6
+
+Efter visuell återkoppling har den mörka ytan bakom logotypen tagits bort. Logotypbilden är oförändrad och ligger direkt mot appens ljusa bakgrund. Installerad version 0.3.0a6 har startats och granskats visuellt; paketerade källfiler, logotyp och signatur har kontrollerats. ckglib bekräftar samma GUI-anropskedja; versionsfilerna är avsiktliga ändringar utanför funktionsplanen. Inga funktioner eller PDF-färger ändrades.
