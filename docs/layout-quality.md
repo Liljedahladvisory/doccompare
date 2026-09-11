@@ -1,10 +1,10 @@
-# Exportkedja 0.3.0a1: lokal provversion
+# Exportkedja 0.3.0a4: lokal installation
 
 ## GUI 0.3.0a4
 
 Svante bad om samma GUI-färger som Meeting Recorder innan installation. Palettens 14 färger hämtades från `meeting-recorder-llt-pr2/meeting_recorder.py`: ljus bakgrund, vita ytor, mörk text och blå accent. Förloppsindikatorn använder samma accent och sidfotens text använder textfärg i stället för kantfärg. Version 0.3.0a3:s PDF-attribution behålls. Ingen jämförelse- eller PDF-logik ändrades.
 
-Det extraherade v4-arkivets signatur och samtliga paketerade Python-källfiler kontrollerades. Den exakta appen startades och huvudfönstret granskades visuellt med versionsmärkning 0.3.0a4. Tk-inställningsdialogen kunde inte öppnas via UI-verktyget; dess färger följer den gemensamma paletten i granskad kod men är inte visuellt verifierade. Inga nya funktionstester behövdes för färgbytet. ckglib granskade GUI-modulen; versionshöjningarna utanför planen är avsiktliga och app.py behöver ingen ändring eftersom gränssnittet är oförändrat. Den installerade appen har inte ersatts.
+Det extraherade v4-arkivets signatur och samtliga paketerade Python-källfiler kontrollerades. Den exakta appen startades och huvudfönstret granskades visuellt med versionsmärkning 0.3.0a4. Tk-inställningsdialogen kunde inte öppnas via UI-verktyget; dess färger följer den gemensamma paletten i granskad kod men är inte visuellt verifierade. Inga nya funktionstester behövdes för färgbytet. ckglib granskade GUI-modulen; versionshöjningarna utanför planen är avsiktliga och app.py behöver ingen ändring eftersom gränssnittet är oförändrat. Version 0.3.0a4 installerades lokalt den 11 september 2026; version 0.2.0 sparades som återställningskopia.
 
 ## Sammanfattning 0.3.0a2
 
@@ -14,7 +14,7 @@ Verifiering av denna ändring: 32 ordinarie tester godkända; de 15 testerna mot
 
 ckglib kartlade `quality_report.render_note` och dess anrop före ändringen. Funktionen behåller sitt gränssnitt, så service, CLI, adapter och integrationstester behövde inga ändringar. Metadataöverföringen i `assemble_pdf` granskades i samma modul. De två versionsfiler som ckglib markerade utanför planen är granskade versionshöjningar till 0.3.0a2. Jämförelsemotorn och begränsningarna för ordinarie release nedan är oförändrade.
 
-Status 2026-09-11: den ombyggda motorn är implementerad och provad mot Microsoft Word 16.112 på macOS. Den ordinarie installerade appen har inte ersatts. Inga ändringar har publicerats i GitHub eller distribuerats till andra användare.
+Status 2026-09-11: den ombyggda motorn är implementerad och provad mot Microsoft Word 16.112 på macOS. Version 0.3.0a4 är installerad lokalt och källändringarna lämnas för granskning via GitHub. Ingen allmän binär release har skapats.
 
 ## Implementerat
 
@@ -57,3 +57,7 @@ ckglib markerade nya hjälparmoduler, dokumentation, versionsfiler och paketerin
 ## Lokal pilot
 
 `scripts/build_local_preview.py` bygger ett separat ZIP-arkiv med **DocCompare Preview.app** från angiven befintlig runtime. Den ändrar inte `/Applications/DocCompare.app`. Signering sker i systemets tillfälliga lokala katalog eftersom FileProvider/iCloud återlägger Finder-metadata på appkataloger under Documents. Arkivet innehåller en lokalt ad hoc-signerad provapp, utan Apple-notarisering. Packa upp piloten i en lokal katalog, exempelvis Hämtade filer. Piloten använder befintlig lokal licens och språkinställning; dokumenten behandlas lokalt av Word.
+
+## Installationskontroll
+
+Den lokala installationen använder namnet DocCompare och det ordinarie bundle-id:t; preview-flaggan har tagits bort och versionsmetadata anger 0.3.0a4. Python-källorna är identiska med det granskade v4-arkivet. Appen signerades lokalt igen och `codesign --verify --deep --strict` godkändes. Den exakta appen i `/Applications/DocCompare.app` startades och huvudfönstrets version och färgpalett kontrollerades. Detta är en installations- och startkontroll; begränsningarna för ett fullständigt GUI-test och en ordinarie release ovan kvarstår.
