@@ -1,4 +1,16 @@
-# Exportkedja 0.3.0a4: lokal installation
+# Exportkedja 0.3.0a7: lokal installation
+
+## Paketeringsfel rättat i 0.3.0a7
+
+Versionerna 0.3.0a1 till 0.3.0a6 kunde starta GUI:t men saknade den nya tjänsten i den modulplats som py2apps startkod faktiskt valde. Den återanvända runtime-miljön innehöll äldre kataloger med punktnamn (`doccompare.comparison`, `doccompare.rendering`, `doccompare.parsers`). Startkodens Finder prioriterade dessa framför det nya vanliga paketträdet. Det gav `No module named 'doccompare.comparison.service'` vid jämförelse.
+
+Tidigare tester med inbäddad Python lade det nya paketträdet på sys.path men körde inte py2apps import-hook. De verifierade motorn och filinnehållet, men fångade inte denna startskillnad. Startkontrollerna av GUI:t ska inte tolkas som fungerande jämförelser i dessa äldre appbyggen.
+
+Byggskriptet uppdaterar nu också alla DocCompare-underpaket som anges i startkodens `_path_hooks`. Ett saknat underpaket stoppar bygget. Före arkivering kör den paketerade Python-tolken `verify_local_bundle.py`, som exekverar den faktiska startkoden med dess Finder och kontrollerar att alla berörda importer kommer från aktuella paketerade källor. Bara det sista GUI-startanropet ersätts av kontrollen.
+
+Verifiering: den nya kontrollen återskapade exakt användarens importfel i 0.3.0a6 och godkändes i 0.3.0a7. Totalt 34 ordinarie tester godkändes, inklusive regressionstest som först visar felet med ett äldre flyttat underpaket och därefter importerar den nya tjänsten efter uppdatering. De 15 tidigare Word-scenarierna kördes inte på nytt. En syntetisk jämförelse kördes däremot genom de verkliga start-hookarna, både i det extraherade arkivet och efter installation i Program. Båda gav tre PDF-sidor och +8/-1 ord med godkänd projektionskontroll. Den installerade appen startades och versionsmärkning 0.3.0a7 granskades. Ett komplett GUI-klickflöde är fortfarande inte verifierat via UI-verktyget.
+
+ckglib kartlade GUI-anropet och den nya paketeringsfunktionen. Byggskriptet innehåller kod på modulnivå och granskades manuellt efter parservarningen. Verifieringsskript, regressionstester och versionsfiler är avsiktliga tillägg utanför den smala anropsplanen.
 
 ## GUI 0.3.0a4
 

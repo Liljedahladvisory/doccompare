@@ -9,6 +9,7 @@ import plistlib
 import shutil
 import subprocess
 import tempfile
+from bundle_layout import refresh_relocated_packages
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--runtime', type=Path, required=True)
@@ -31,6 +32,7 @@ shutil.copytree(source, package, ignore=shutil.ignore_patterns('__pycache__', '*
 # py2app also ships the executable entry script at the resource root.
 shutil.copyfile(source / 'app.py', output / 'Contents/Resources/app.py')
 boot = output / 'Contents/Resources/__boot__.py'
+refresh_relocated_packages(source, package.parent, boot)
 boot.write_text("import os\nos.environ['DOCCOMPARE_PREVIEW'] = '1'\n" + boot.read_text())
 plist = output / 'Contents/Info.plist'
 info = plistlib.loads(plist.read_bytes())
@@ -51,6 +53,9 @@ for line in attributes.splitlines():
                 subprocess.run(['xattr', '-d', attribute, str(path)], check=True)
 subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(output)], check=True)
 subprocess.run(['codesign', '--verify', '--deep', '--strict', str(output)], check=True)
+subprocess.run([str(output / 'Contents/MacOS/python'),
+                str(Path(__file__).with_name('verify_local_bundle.py').resolve()),
+                str(output)], check=True)
 subprocess.run(['ditto', '-c', '-k', '--norsrc', '--keepParent', str(output), str(archive)], check=True)
 staging.cleanup()
 print(archive)
