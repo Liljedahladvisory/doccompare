@@ -1,4 +1,12 @@
-# Exportkedja 0.3.0a8: lokal installation
+# Exportkedja 0.3.0a9: lokal installation
+
+## Kortare sammanfattning 0.3.0a9
+
+På Svantes begäran har hela avsnittet ”Övriga ändringar” tagits bort ur sammanfattningen. Filnamn, datum, ordantal, teckenförklaring, eventuell upplysning om ogiltiga interna länkar och produktattribution behålls. Jämförelsemotor och kvalitetskontroller är oförändrade.
+
+45 ordinarie tester godkändes. De 16 Word-testerna från 0.3.0a8 kördes inte på nytt för denna presentationsändring. Den paketerade rapportmodulen kontrollerades genom verklig bootstrap och användes för att uppdatera det tidigare verifierade verksamhetsdokumentparets PDF. Sammanfattningen är nu en sida i stället för nio, totalt 24 sidor. De första 23 sidornas innehållsströmmar och sidstorlek är identiska med det tidigare resultatet. Slutsidan har renderats och granskats visuellt. Ingen ny Word-jämförelse behövdes; den godkända Word-exporten återanvändes.
+
+ckglib kartlade render_note före ändringen. Anrop och tester behåller samma gränssnitt; versionsfiler och dokumentation är avsiktliga ändringar utanför den smala funktionsplanen. Äldre versionsavsnitt nedan beskriver historiska resultat.
 
 ## Kolumnkontroll och PDF-länkar rättade i 0.3.0a8
 
