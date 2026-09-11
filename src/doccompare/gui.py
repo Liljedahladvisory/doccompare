@@ -561,15 +561,15 @@ class DocCompareApp:
 
         name_row = tk.Frame(left, bg=BG)
         name_row.pack(anchor="w")
+        from PIL import Image, ImageTk
+        with Image.open(Path(__file__).parent / "assets" / "logo-dark.png") as logo:
+            logo = logo.convert("RGBA")
+            logo.thumbnail((260, 36), Image.Resampling.LANCZOS)
+            self._brand_logo_image = ImageTk.PhotoImage(logo, master=self.root)
         self._logo_name_lbl = tk.Label(
-            name_row, text=self._display_name(),
-            font=FONT_LOGO1, bg=BG, fg=FG)
+            name_row, image=self._brand_logo_image,
+            bg=FG, padx=8, pady=4, borderwidth=0, highlightthickness=0)
         self._logo_name_lbl.pack(side="left")
-        tk.Label(name_row, text="  DocCompare",
-                 font=FONT_LOGO2, bg=BG, fg=FG2).pack(side="left")
-
-        tk.Label(left, text="Powered by Liljedahl Legal Tech",
-                 font=FONT_POWERED, bg=BG, fg=FG_DIM).pack(anchor="w", pady=(3, 0))
 
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", fill="y")
@@ -923,7 +923,6 @@ class DocCompareApp:
                     })
                 threading.Thread(target=_reg, daemon=True).start()
 
-                self._logo_name_lbl.config(text=self._display_name())
                 dlg.destroy()
 
                 # Show language picker after registration
@@ -1126,7 +1125,6 @@ class DocCompareApp:
             self._config["user_name"] = name
             self._config["language"] = new_lang
             save_config(self._config)
-            self._logo_name_lbl.config(text=self._display_name())
             dlg.destroy()
             if lang_changed:
                 self._populate_main_ui()

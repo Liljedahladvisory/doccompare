@@ -61,3 +61,9 @@ ckglib markerade nya hjälparmoduler, dokumentation, versionsfiler och paketerin
 ## Installationskontroll
 
 Den lokala installationen använder namnet DocCompare och det ordinarie bundle-id:t; preview-flaggan har tagits bort och versionsmetadata anger 0.3.0a4. Python-källorna är identiska med det granskade v4-arkivet. Appen signerades lokalt igen och `codesign --verify --deep --strict` godkändes. Den exakta appen i `/Applications/DocCompare.app` startades och huvudfönstrets version och färgpalett kontrollerades. Detta är en installations- och startkontroll; begränsningarna för ett fullständigt GUI-test och en ordinarie release ovan kvarstår.
+
+## Logotyp 0.3.0a5
+
+Sidhuvudet visar nu Liljedahl Advisorys logotypbild i stället för det konfigurerade kontonamnet. Bilden kommer från webbprojektets `public/images/liljedahl-logo.png` och återges oförvrängd mot en mörk yta för kontrast. Kontonamn och språk finns kvar i inställningarna; ändring av namn ersätter inte logotypen. Logotypen paketeras i både wheel och macOS-app.
+
+32 ordinarie tester godkändes (15 Word-tester inte omkörda för denna GUI-ändring). Den installerade appens signatur och källfiler kontrollerades och logotypen granskades i huvudfönstret med versionsmärkning 0.3.0a5. ckglib granskade GUI-ändringen; bildfilen, paketeringsraden och versionshöjningarna utanför anropsplanen är uttryckliga delar av ändringen. Startmodulen behåller sitt gränssnitt och behöver ingen ändring.
