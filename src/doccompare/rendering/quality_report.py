@@ -83,7 +83,7 @@ def render_note(summary, original_name, modified_name):
     {moved_legend}{format_legend}
     <p>Oförändrad text: text som är identisk i båda versionerna.</p></section>
     {details}
-    <footer>Genererad av DocCompare · Liljedahl Advisory AB</footer>
+    <footer>Genererad av DocCompare · a Liljedahl Legal Tech product</footer>
     </body></html>'''
     # Keep technical provenance available without placing it on the client-facing page.
     writer = PdfWriter()
