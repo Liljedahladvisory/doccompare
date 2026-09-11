@@ -363,21 +363,22 @@ def _send_registration(data: dict) -> bool:
     return False
 
 
+# Palette shared with Meeting Recorder LLT (macOS light theme).
 # ── Colour palette ──────────────────────────────────────────────────────────
-BG      = "#0E0D0C"
-BG2     = "#161412"
-BG3     = "#1E1B18"
-BG4     = "#272320"
-BORDER  = "#332E28"
-BORDER2 = "#4A4238"
-FG      = "#F2EEE8"
-FG2     = "#C8B89A"
-FG3     = "#E0D4C0"
-FG_DIM  = "#9A8A72"
-ACCENT  = "#E07820"
-ACCENT2 = "#C05E0A"
-RED     = "#D95050"
-GREEN   = "#4AB870"
+BG      = "#F5F7FA"
+BG2     = "#FFFFFF"
+BG3     = "#EEF2F6"
+BG4     = "#E4EAF1"
+BORDER  = "#D9E0EA"
+BORDER2 = "#C7D0DD"
+FG      = "#111827"
+FG2     = "#4B5563"
+FG3     = "#1F2937"
+FG_DIM  = "#8A94A6"
+ACCENT  = "#0A84FF"
+ACCENT2 = "#006ADC"
+RED     = "#FF453A"
+GREEN   = "#30D158"
 
 # ── Fonts ───────────────────────────────────────────────────────────────────
 FONT_LOGO1   = ("Helvetica Neue", 14, "bold")
@@ -402,7 +403,7 @@ def _style_widgets():
     style = ttk.Style()
     style.theme_use("default")
     style.configure(
-        "Orange.Horizontal.TProgressbar",
+        "Accent.Horizontal.TProgressbar",
         troughcolor=BG3, background=ACCENT, bordercolor=BG,
         lightcolor=ACCENT, darkcolor=ACCENT,
     )
@@ -635,7 +636,7 @@ class DocCompareApp:
         # ── Progress + status ────────────────────────────────────────────
         self.progress = ttk.Progressbar(
             outer, mode="indeterminate", length=400,
-            style="Orange.Horizontal.TProgressbar")
+            style="Accent.Horizontal.TProgressbar")
         self.progress.pack(fill="x", pady=(0, 4))
 
         self.status_label = tk.Label(
@@ -648,7 +649,7 @@ class DocCompareApp:
         footer.pack(side="bottom", fill="x", pady=(16, 0))
         tk.Label(footer,
                  text="Liljedahl Legal Tech  \u2022  Liljedahl Advisory AB",
-                 font=FONT_XS, bg=BG, fg=BORDER2).pack()
+                 font=FONT_XS, bg=BG, fg=FG_DIM).pack()
 
     def _file_card(self, parent, title, btn_text, command,
                    default_text=None, optional=False, drop_callback=None):

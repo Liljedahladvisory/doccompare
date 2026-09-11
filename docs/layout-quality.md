@@ -1,5 +1,11 @@
 # Exportkedja 0.3.0a1: lokal provversion
 
+## GUI 0.3.0a4
+
+Svante bad om samma GUI-färger som Meeting Recorder innan installation. Palettens 14 färger hämtades från `meeting-recorder-llt-pr2/meeting_recorder.py`: ljus bakgrund, vita ytor, mörk text och blå accent. Förloppsindikatorn använder samma accent och sidfotens text använder textfärg i stället för kantfärg. Version 0.3.0a3:s PDF-attribution behålls. Ingen jämförelse- eller PDF-logik ändrades.
+
+Det extraherade v4-arkivets signatur och samtliga paketerade Python-källfiler kontrollerades. Den exakta appen startades och huvudfönstret granskades visuellt med versionsmärkning 0.3.0a4. Tk-inställningsdialogen kunde inte öppnas via UI-verktyget; dess färger följer den gemensamma paletten i granskad kod men är inte visuellt verifierade. Inga nya funktionstester behövdes för färgbytet. ckglib granskade GUI-modulen; versionshöjningarna utanför planen är avsiktliga och app.py behöver ingen ändring eftersom gränssnittet är oförändrat. Den installerade appen har inte ersatts.
+
 ## Sammanfattning 0.3.0a2
 
 Efter Svantes granskning har sammanfattningen fått ett kompakt upplägg med inspiration från den tidigare versionen: mindre rubrik, filnamn och datum, färgkodade ändringsantal på egna rader och kort teckenförklaring. Övriga ändringar visas vid behov i en enkel tabell. Filhashar, Word-version och kontrollstatus finns i PDF-metadata. Ingen separat uppskattning av oförändrade ord har återinförts.
