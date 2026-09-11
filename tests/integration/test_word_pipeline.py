@@ -53,6 +53,25 @@ def base_document():
     return document
 
 
+def test_added_trailing_column_roundtrip(tmp_path):
+    original, modified, output = [tmp_path / name for name in ('old.docx', 'new.docx', 'result.pdf')]
+    doc = Document()
+    table = doc.add_table(rows=2, cols=3)
+    table.style = 'Table Grid'
+    for row in range(2):
+        for col in range(3):
+            table.cell(row, col).text = f'Rad {row + 1}, kolumn {col + 1}'
+    doc.save(original)
+    table.add_column(Inches(1))
+    for row in range(2):
+        table.cell(row, 1).text = f'Nytt värde {row + 1}'
+        table.cell(row, 3).text = f'Tillagd kolumn {row + 1}'
+    doc.save(modified)
+    summary = compare_documents(original, modified, output)
+    assert summary['added_words'] > 0 and summary['deleted_words'] > 0
+    assert len(PdfReader(output).pages) > summary['document_pages']
+
+
 @pytest.mark.parametrize('scenario', [
     'unchanged', 'text', 'row_added', 'row_deleted', 'header', 'footer',
     'formatting', 'paragraph_deleted', 'paragraph_added', 'list_item_added',

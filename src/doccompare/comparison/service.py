@@ -8,7 +8,7 @@ import tempfile
 
 from .revisions import preflight, revision_ledger, summarize, verify_projections
 from .word_bridge import run_comparison, word_lock, word_workspace
-from doccompare.rendering.quality_report import assemble_pdf, render_note, validate_pdf
+from doccompare.rendering.quality_report import assemble_pdf, render_note, validate_pdf, remove_broken_internal_links
 
 
 def compare_documents(original, modified, output, *, author='DocCompare',
@@ -35,9 +35,20 @@ def compare_documents(original, modified, output, *, author='DocCompare',
         status('Jämför och exporterar med Microsoft Word…')
         version = run_comparison(folder, author)
         status('Kontrollerar resultatet mot båda källversionerna…')
-        verify_projections(file('original.docx'), file('modified.docx'), file('accepted.docx'), file('rejected.docx'))
+        column_notes = verify_projections(file('original.docx'), file('modified.docx'),
+                                          file('accepted.docx'), file('rejected.docx'),
+                                          tracked=file('tracked.docx'))
         summary = summarize(revision_ledger(file('tracked.docx')))
-        summary.update(word_version=version, document_pages=len(validate_pdf(file('document.pdf')).pages),
+        for note in column_notes:
+            summary['revisions'].append({
+                'kind': 'tblGridChange', 'part': 'word/document.xml', 'paragraph': 0,
+                'structural': True, 'text': '', 'scope': 'tblGrid',
+                'context': f'Tabell {note["table"]}: {note["old_columns"]} → {note["new_columns"]} kolumner.',
+            })
+        summary['column_validation_notes'] = column_notes
+        document_pdf = validate_pdf(file('document.pdf'))
+        summary['unavailable_internal_links'] = remove_broken_internal_links(document_pdf)
+        summary.update(word_version=version, document_pages=len(document_pdf.pages),
                        original_sha256=sha256(file('original.docx').read_bytes()).hexdigest(),
                        modified_sha256=sha256(file('modified.docx').read_bytes()).hexdigest(),
                        engine='microsoft-word', validation='text-projections-passed')

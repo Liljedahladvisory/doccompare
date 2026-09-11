@@ -111,8 +111,9 @@ def test_failed_job_keeps_previous_result_and_cleans_working_copies(tmp_path, mo
             shutil.copyfile(old, folder / (folder.name + '-' + name))
         return 'test'
     monkeypatch.setattr(service, 'run_comparison', fail if stage == 'word' else run)
-    monkeypatch.setattr(service, 'verify_projections', fail if stage == 'projection' else lambda *a: None)
+    monkeypatch.setattr(service, 'verify_projections', fail if stage == 'projection' else lambda *a, **k: [])
     monkeypatch.setattr(service, 'validate_pdf', lambda *a: type('PDF', (), {'pages': [1]})())
+    monkeypatch.setattr(service, 'remove_broken_internal_links', lambda *a: 0)
     monkeypatch.setattr(service, 'render_note', fail if stage == 'report' else lambda *a: b'note')
     monkeypatch.setattr(service, 'assemble_pdf', fail)
     with pytest.raises(RuntimeError, match='deliberate'):

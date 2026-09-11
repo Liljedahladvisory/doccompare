@@ -1,4 +1,16 @@
-# Exportkedja 0.3.0a7: lokal installation
+# Exportkedja 0.3.0a8: lokal installation
+
+## Kolumnkontroll och PDF-länkar rättade i 0.3.0a8
+
+Ett verkligt dokumentpar stoppades trots att texten återställdes korrekt. Word lämnade en extra tom tabellkolumn i kontrollkopian efter att ändringar avvisats. Kontrollen kan nu känna igen denna rest när spårad tabellgeometri, tomma resultatceller och infogad text ger stöd för det, och exakt en kolumnjustering återställer samtliga kvarvarande cellers innehåll i ursprunglig ordning. Saknad text, tvetydig justering, sammanfogade eller nästlade tabeller och otillräckligt revisionsunderlag godtas inte. Normaliseringen sker bara i kontrollens minnesrepresentation; källdokument och PDF ändras inte. Den accepterade kopian måste fortfarande motsvara den nya källan, och hela den normaliserade avvisade kopian måste motsvara den gamla. Kolumnändringen redovisas i sammanfattningen.
+
+Samma dokumentpars Word-export innehöll sju interna PDF-länkar med ogiltiga mål. Sammanfogningen tar nu bort endast sådana oanvändbara länkannoteringar och redovisar antalet i rapporten. Länktext, giltiga länkar och sidornas innehållsströmmar bevaras. PDF-parsning och slutkontroll är fortsatt strikta; andra fel döljs inte.
+
+Verifiering av slutkoden: **45 ordinarie tester och 16 tester mot riktig Word godkända**. Regressionerna omfattar felaktiga kolumnjusteringar, förlorat innehåll, saknat revisionsunderlag samt bevarande av giltiga interna och externa PDF-länkar. Det exakta verksamhetsdokumentparet kördes genom slutpaketets verkliga bootstrap och hela jämförelsetjänsten: 23 dokumentsidor och 9 sammanfattningssidor, med godkända projektions- och PDF-kontroller. Kroppssida och sammanfattning renderades för visuell granskning; exakt slutfil öppnades i Förhandsvisning, som visade 32 sidor. Verksamhetsdokumenten ingår inte i repot.
+
+Version 0.3.0a8 är installerad lokalt. Signatur, källöverensstämmelse och verkliga bootstrap-importer är kontrollerade; huvudfönstret har granskats med rätt versionsmärkning. Föregående installation finns som återställningskopia. Hela GUI-klickflödet är fortsatt inte verifierat genom UI-verktyget.
+
+ckglib kartlade projektionskontrollen före ändringen och PDF-länkfunktionen separat. Versionsfiler, dokumentation och PDF-regressionstester utanför den smala projektionsplanen är avsiktliga tillägg. GUI, CLI och adapter behåller sina gränssnitt och behöver ingen ändring för dessa rättningar. Äldre versionsavsnitt nedan är historiska verifieringsresultat.
 
 ## Paketeringsfel rättat i 0.3.0a7
 

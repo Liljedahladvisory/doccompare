@@ -195,8 +195,12 @@ def _relationships(path, part):
 
 def content_projection(path):
     """Text + paragraph/cell boundaries per story, insensitive to ZIP part IDs."""
+    return _project_stories(path, read_stories(path))
+
+
+def _project_stories(path, parts):
     stories = []
-    for part, tree in read_stories(path):
+    for part, tree in parts:
         family = re.sub(r'\d+', '', Path(part).stem)
         tokens = []
         relationships = _relationships(path, part)
@@ -215,9 +219,94 @@ def content_projection(path):
     return Counter(stories)
 
 
-def verify_projections(original, modified, accepted, rejected):
+def _rejected_column_residue(original, rejected, tracked):
+    """Normalize only proven empty inserted columns left by Word after rejection.
+
+    Never changes a DOCX or the PDF. All retained cell contents/positions, rows,
+    stories, fields and links must still match the source projection exactly.
+    Merged/nested tables and unsupported inserted content remain fail-closed.
+    """
+    source_parts = dict(read_stories(original))
+    result_parts = dict(read_stories(rejected))
+    tracked_parts = dict(read_stories(tracked))
+    part = 'word/document.xml'
+    if any(part not in parts for parts in (source_parts, result_parts, tracked_parts)):
+        return None, []
+    tables = [list(parts[part].iter(f'{{{W}}}tbl'))
+              for parts in (source_parts, result_parts, tracked_parts)]
+    if len({len(items) for items in tables}) != 1:
+        return None, []
+    notes = []
+    for index, (source, result, redline) in enumerate(zip(*tables), 1):
+        source_rows, result_rows, tracked_rows = [t.findall('w:tr', NS) for t in (source, result, redline)]
+        if not source_rows or len({len(rows) for rows in (source_rows, result_rows, tracked_rows)}) != 1:
+            continue
+        old_count = len(source_rows[0].findall('w:tc', NS))
+        new_count = len(result_rows[0].findall('w:tc', NS))
+        if new_count <= old_count or redline.find('w:tblGrid/w:tblGridChange', NS) is None:
+            continue
+        if any(t.xpath('.//w:tbl | .//w:gridSpan[not(ancestor::w:tcPrChange)] | '
+                       './/w:hMerge[not(ancestor::w:tcPrChange)] | '
+                       './/w:vMerge[not(ancestor::w:tcPrChange)]', namespaces=NS)
+               for t in (source, result, redline)):
+            continue
+        from itertools import combinations
+        from math import comb
+        row_sets = [list(zip(*(row.findall('w:tc', NS) for row in rows)))
+                    for rows in (source_rows, result_rows, tracked_rows)]
+        if any(len(row.findall('w:tc', NS)) != count
+               for rows, count in ((source_rows, old_count), (result_rows, new_count), (tracked_rows, new_count))
+               for row in rows):
+            continue
+        candidates = []
+        for column, (result_cells, evidence_cells) in enumerate(zip(row_sets[1], row_sets[2])):
+            for cell, evidence in zip(result_cells, evidence_cells):
+                if any(_paragraph_tokens(p) for p in cell.iter(f'{{{W}}}p')):
+                    break
+                # Only plain inserted text can justify an empty residual cell.
+                if evidence.xpath('.//w:del | .//w:moveFrom | .//w:fldChar | .//w:fldSimple | '
+                                  './/w:hyperlink | .//w:drawing | .//w:pict | .//w:object | '
+                                  './/w:footnoteReference | .//w:endnoteReference', namespaces=NS):
+                    break
+                text_nodes = evidence.xpath('.//w:t | .//w:tab | .//w:br', namespaces=NS)
+                if not text_nodes or any(not n.xpath('ancestor::w:ins', namespaces=NS) for n in text_nodes):
+                    break
+            else:
+                candidates.append(column)
+        extra = new_count - old_count
+        if len(candidates) < extra or comb(len(candidates), extra) > 256:
+            continue
+        source_rels, result_rels = _relationships(original, part), _relationships(rejected, part)
+        def cell_value(cell, relationships):
+            return tuple(value for p in cell.iter(f'{{{W}}}p')
+                         if (value := _paragraph_tokens(p, relationships)))
+        matches = []
+        for columns in combinations(candidates, extra):
+            if all([cell_value(c, source_rels) for c in old_row.findall('w:tc', NS)] ==
+                   [cell_value(c, result_rels) for ci, c in enumerate(result_row.findall('w:tc', NS))
+                    if ci not in columns]
+                   for old_row, result_row in zip(source_rows, result_rows)):
+                matches.append(columns)
+        # An ambiguous alignment is not sufficient evidence.
+        if len(matches) != 1:
+            continue
+        for column in matches[0]:
+            for cell in row_sets[1][column]:
+                cell.getparent().remove(cell)
+        notes.append({'table': index, 'old_columns': old_count, 'new_columns': new_count})
+    return _project_stories(rejected, result_parts.items()), notes
+
+
+def verify_projections(original, modified, accepted, rejected, *, tracked=None):
+    notes = []
     for source, projection, label in [(modified, accepted, 'nya'), (original, rejected, 'gamla')]:
-        if content_projection(source) != content_projection(projection):
+        expected = content_projection(source)
+        if expected != content_projection(projection):
+            if label == 'gamla' and tracked is not None:
+                normalized, notes = _rejected_column_residue(source, projection, tracked)
+                if notes and expected == normalized:
+                    continue
             raise ComparisonQualityError(
                 f'Word-resultatet kunde inte stämmas av mot den {label} versionen. '
                 'Ingen PDF har ersatt din resultatfil. Dokumentparet behöver granskas.')
+    return notes

@@ -5,6 +5,37 @@ from io import BytesIO
 import re
 
 from pypdf import PdfReader, PdfWriter
+from pypdf.errors import PdfReadError
+from pypdf.generic import ArrayObject, NameObject, NullObject
+
+
+def remove_broken_internal_links(reader):
+    """Drop only unusable Link annotations emitted by Word for deleted targets.
+
+    Page content, external links and valid internal links are retained. Other
+    PDF parsing errors still propagate. The count is shown in the summary.
+    """
+    removed = 0
+    for page in reader.pages:
+        annotations = page['/Annots'] if '/Annots' in page else []
+        kept = []
+        for reference in annotations:
+            annotation = reference.get_object()
+            if annotation.get('/Subtype') == '/Link' and '/Dest' in annotation:
+                try:
+                    target = annotation['/Dest']
+                    if isinstance(target, ArrayObject) and target:
+                        target = target[0].get_object()
+                    broken = target is None or isinstance(target, NullObject)
+                except PdfReadError:
+                    broken = True
+                if broken:
+                    removed += 1
+                    continue
+            kept.append(reference)
+        if len(kept) != len(annotations):
+            page[NameObject('/Annots')] = ArrayObject(kept)
+    return removed
 
 
 def validate_pdf(path):
@@ -54,6 +85,9 @@ def render_note(summary, original_name, modified_name):
     moved_stat = f'<p class="moved">{moved} {moved_label}</p>' if moved else ''
     moved_legend = ('<p><span class="moved double">Flyttad text</span>: text som har flyttats inom dokumentet.</p>') if moved else ''
     format_legend = ('<p><span class="format">Ändrad formatering</span>: exempelvis ändrat tecken- eller styckeformat.</p>') if summary['format_revision_count'] else ''
+    missing_links = summary.get('unavailable_internal_links', 0)
+    link_note = (f'<p class="link-note">{missing_links} interna länkar saknar ett giltigt mål i Words PDF-export. '
+                 'Länktexten finns kvar, men dessa länkar går inte att klicka på.</p>') if missing_links else ''
     html = f'''<!doctype html><html lang="sv"><meta charset="utf-8"><style>
     @page {{size:A4; margin:20mm; @bottom-left {{content:"DocCompare";font-family:Arial,sans-serif;font-size:8pt;color:#888}}
     @bottom-right {{content:"Sammanfattning " counter(page) " av " counter(pages);font-family:Arial,sans-serif;font-size:8pt;color:#888}}}}
@@ -66,7 +100,7 @@ def render_note(summary, original_name, modified_name):
     .stats {{font-size:11pt;margin-bottom:22pt;break-inside:avoid}}
     .added {{color:#2e97d3}} .deleted {{color:#b5082e}} .moved {{color:#1a7a3f}} .format {{color:#633277}}
     .underline {{text-decoration:underline}} .strike {{text-decoration:line-through}} .double {{text-decoration:underline double}}
-    .legend {{break-inside:avoid}} .details {{margin-top:22pt}}
+    .legend {{break-inside:avoid}} .details {{margin-top:22pt}} .link-note {{margin-top:12pt;color:#555}}
     table {{border-collapse:collapse;width:100%;font-size:9pt;table-layout:fixed}}
     th,td {{text-align:left;vertical-align:top;padding:5pt 6pt 5pt 0;border-bottom:.5pt solid #e1e5e8;overflow-wrap:anywhere}}
     th {{font-weight:600;color:#555}} th:nth-child(1) {{width:22%}} th:nth-child(2) {{width:22%}}
@@ -82,6 +116,7 @@ def render_note(summary, original_name, modified_name):
     <p><span class="deleted strike">Borttagen text</span>: text som finns i originalet men inte i den modifierade versionen.</p>
     {moved_legend}{format_legend}
     <p>Oförändrad text: text som är identisk i båda versionerna.</p></section>
+    {link_note}
     {details}
     <footer>Genererad av DocCompare · a Liljedahl Legal Tech product</footer>
     </body></html>'''
@@ -101,6 +136,7 @@ def render_note(summary, original_name, modified_name):
 
 def assemble_pdf(main_pdf, note, destination):
     main = validate_pdf(main_pdf)
+    remove_broken_internal_links(main)
     writer = PdfWriter()
     writer.append(main, import_outline=False)
     note_reader = PdfReader(BytesIO(note))
