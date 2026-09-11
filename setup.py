@@ -21,7 +21,7 @@ class DocComparePy2App(py2app):
 APP = ['src/doccompare/app.py']
 DATA_FILES = [
     ('doccompare/rendering', ['src/doccompare/rendering/styles.css']),
-    ('doccompare/assets', ['src/doccompare/assets/logo.png']),
+    ('doccompare/assets', ['src/doccompare/assets/logo.png', 'src/doccompare/assets/logo-dark.png']),
 ]
 OPTIONS = {
     'argv_emulation': False,
@@ -66,8 +66,8 @@ OPTIONS = {
         'CFBundleName': 'DocCompare',
         'CFBundleDisplayName': 'DocCompare',
         'CFBundleIdentifier': 'se.liljedahladvisory.doccompare',
-        'CFBundleVersion': '0.2.0',
-        'CFBundleShortVersionString': '0.2.0',
+        'CFBundleVersion': '0.3.0',
+        'CFBundleShortVersionString': '0.3.0',
         'NSHighResolutionCapable': True,
         'NSSupportsAutomaticTermination': False,
         'NSSupportsSuddenTermination': False,

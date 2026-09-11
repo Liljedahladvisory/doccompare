@@ -82,40 +82,13 @@ def compare(original: Path, modified: Path, output: Path, author: str, verbose: 
     moved_str = f"  [yellow]{moved} words moved[/yellow]" if moved else ""
     console.print(f"  [green]+{s.get('added_words', 0)} words added[/green]  "
                   f"[red]-{s.get('deleted_words', 0)} words deleted[/red]"
-                  f"{moved_str}  "
-                  f"[dim]{s.get('unchanged_words', 0)} words unchanged[/dim]")
+                  f"{moved_str}")
 
 
 def _compare_docx(original, modified, output, author, progress, task):
-    """DOCX comparison — Word-native adapter with ooxml_engine fallback."""
-    from doccompare.comparison.adapters import get_adapter
-
-    adapter = get_adapter()
-    if adapter:
-        progress.update(task, description="Comparing via Word\u2026")
-        try:
-            return adapter.compare_and_export(
-                original, modified, output,
-                original_name=original.name,
-                modified_name=modified.name,
-            )
-        except RuntimeError as e:
-            logger.warning(f"Word adapter failed, falling back to OOXML: {e}")
-
-    # Fallback: XML-level comparison
-    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-    from doccompare.rendering.pdf_pipeline import produce_pdf
-
-    progress.update(task, description="Comparing documents\u2026")
-    doc_tree, summary = ooxml_compare(original, modified, None, author=author)
-
-    progress.update(task, description="Rendering PDF\u2026")
-    produce_pdf(
-        doc_tree, output, summary,
-        original_name=original.name,
-        modified_name=modified.name,
-        docx_path=modified,
+    """Use the same validated, layout-preserving pipeline as the GUI."""
+    from doccompare.comparison.service import compare_documents
+    return compare_documents(
+        original, modified, output, author=author,
+        progress=lambda message: progress.update(task, description=message),
     )
-    return summary
-
-

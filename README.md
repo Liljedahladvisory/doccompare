@@ -1,161 +1,63 @@
 # DocCompare
 
-A Python CLI tool that compares two documents (`.docx` and/or `.pdf`) and generates a PDF report showing all differences with color-coded formatting.
+DocCompare jämför två rena `.docx`-versioner och skapar en PDF med ändringar i löptexten. Den nya exportkedjan använder Microsoft Word för både jämförelse och sidlayout. GUI och CLI anropar samma tjänst.
 
-## Color coding
+Denna gren är en **provversion av den ombyggda exportkedjan**. Version 0.3.0a10 är lokalt installerad och verifierad på ett verksamhetsdokumentpar samt 61 automatiska tester, varav 16 mot riktig Word. Fortsatt granskning av fler representativa dokument behövs. Äldre provbyggen till och med 0.3.0a6 hade ett importfel i Mac-appens paketering. Version 0.3.0a8 rättar även kontroll av kvarlämnade tomma tabellkolumner och hantering av ogiltiga interna länkar i Words PDF-export. Se [verifiering och begränsningar](docs/layout-quality.md).
 
-- **Blue + underlined** — added text
-- **Red + strikethrough** — deleted text
-- **Green** — moved text (shown at both origin and destination)
+## Användning
 
-## Features
+Kräver macOS, installerad Microsoft Word och tillåtelse att styra Word via Automation. Källfilerna måste vara `.docx` utan befintliga spårade ändringar. Inbäddade OLE-objekt och altChunk stoppas tills de kan hanteras säkert. PDF-indata stöds inte.
 
-- Supports `.docx` and `.pdf` input files in any combination
-- Word-level diff using diff-match-patch
-- Move detection: identifies blocks of text that have been relocated
-- Preserves heading levels, list items, and table structure
-- Generates a self-contained PDF report via WeasyPrint
-- Summary statistics (added/deleted/moved/unchanged word counts)
-- Rich progress display in the terminal
-
-## Requirements
-
-- Python 3.10+
-- The following system libraries are required by WeasyPrint:
-  - `pango`, `cairo`, `gdk-pixbuf` (Linux/macOS via Homebrew or apt)
-
-## Installation
-
-```bash
-pip install doccompare
+```sh
+doccompare tidigare.docx ny.docx -o jamforelse.pdf --author "DocCompare"
+doccompare-gui
 ```
 
-Or install from source:
+Stäng eventuella modala Word-dialoger innan jämförelsen startas. Word arbetar i kortvariga, unikt namngivna arbetskopior i sin Office-sandbox. Appen köar samtidiga DocCompare-jobb. Den stänger bara arbetskopior som den själv skapat.
 
-```bash
-git clone https://github.com/yourorg/doccompare.git
-cd doccompare
-pip install -e .
+- Blå understrykning: tillagd text.
+- Röd överstrykning: borttagen text.
+- Grön dubbelmarkering: flyttad text, när Word identifierar en flytt.
+- Violett: ändrad formatering. Struktur och andra dokumentdelar beskrivs även i bilagan.
+
+Word sätter dokumentsidorna. En separat svensk jämförelsebilaga fogas sist utan att sätta om dem. Längre ändringar kan ge andra rad- och sidbrytningar än i en ren källversion.
+
+## Kvalitetskontroller och avgränsning
+
+1. Granska DOCX-paketen och stoppa redan spårade ändringar eller uttryckligen otillåtna objekt.
+2. Jämför arbetskopiorna i Word med formatändringar aktiverade.
+3. Spara Words redline och exportera den med ändringar i löptexten.
+4. Låt Word acceptera respektive avvisa ändringarna i separata kontrollkopior.
+5. Stäm av text, fältinstruktioner, länkmål, bildreferenser och stycke-/tabellgränser mot respektive källa. Beräknade fältresultat och tomma stycken normaliseras i denna kontroll.
+6. Läs statistiken från Words faktiska revisioner. Det finns ingen separat approximativ diff som kan ge andra statistikvärden.
+7. Validera PDF och kontrollera att sidformat och sidornas innehållsströmmar överlever sammanfogningen oförändrade. Publicera lokalt genom atomiskt filbyte först när alla steg lyckats.
+
+Ett misslyckande lämnar en befintlig resultatfil orörd. Appen växlar inte tyst till HTML- eller egen OOXML-sättning. Den äldre motorn finns kvar för dess tidigare tester men används inte av GUI, CLI eller adapterfasaden.
+
+Kontrollerna är **inte en fullständig visuell eller semantisk bevisning**. Bland annat jämförs inte all style-arv, numrering, tabellgeometri eller placering av sidhuvuden mellan avsnitt automatiskt. Bildreferenser jämförs efter innehåll, men inte all bildgeometri. Word kan normalisera format och kan klassificera en flytt som borttagning plus tillägg. Granska verksamhetskritiska resultat visuellt före extern leverans. För redan spårade dokument behövs ett framtida, uttryckligt val av jämförelsebas.
+
+## Arkitektur
+
+```text
+GUI / CLI / kompatibel adapter
+  -> comparison.service.compare_documents
+     -> revisions.preflight
+     -> word_bridge (lås, arbetskopior, Word-automation)
+     -> revisions.verify_projections + revision_ledger
+     -> quality_report (separat bilaga, PDF-kontroll, sammanfogning)
+     -> atomiskt byte av resultatfil
 ```
 
-### macOS (Homebrew)
+## Utveckling och test
 
-Install WeasyPrint system dependencies:
+Python 3.10+. Installera projektets beroenden i en separat virtuell miljö. WeasyPrint används bara för bilagan och kräver Pango på macOS. Beroendena anges i `pyproject.toml`; inga nya produktionsberoenden tillkom i exportombyggnaden.
 
-```bash
-brew install pango cairo gdk-pixbuf libffi
+```sh
+python -m pip install -e .
+python -m pip install pytest
+python -m pytest tests -q
+# Opt-in: syntetiska integrationstester som faktiskt styr installerad Word.
+DOCCOMPARE_WORD_TESTS=1 python -m pytest tests/integration -q
 ```
 
-### Linux (Debian/Ubuntu)
-
-```bash
-sudo apt install libpango-1.0-0 libpangoft2-1.0-0 libcairo2 libgdk-pixbuf2.0-0
-```
-
-## Usage
-
-### Basic usage
-
-```bash
-# Compare two .docx files
-doccompare original.docx modified.docx
-
-# Compare two PDFs
-doccompare v1.pdf v2.pdf
-
-# Cross-format comparison
-doccompare draft.docx final.pdf
-
-# Specify output path
-doccompare original.docx modified.docx -o diff_report.pdf
-```
-
-### Options
-
-```
-Usage: doccompare [OPTIONS] ORIGINAL MODIFIED
-
-  Compare two documents and generate a PDF with color-coded differences.
-
-  ORIGINAL and MODIFIED can be .docx or .pdf files in any combination.
-
-Options:
-  -o, --output PATH           Path to output PDF (default: comparison_YYYYMMDD_HHMMSS.pdf)
-  --move-threshold FLOAT      Similarity threshold (0-100) for classifying text
-                              as moved (default: 85)
-  --no-moves                  Disable move detection (faster)
-  -v, --verbose               Show detailed logging
-  --version                   Show the version and exit.
-  --help                      Show this message and exit.
-```
-
-### Examples
-
-```bash
-# Standard comparison with default settings
-doccompare contract_v1.docx contract_v2.docx
-
-# Strict move detection (require near-identical text to count as moved)
-doccompare old.docx new.docx --move-threshold 95
-
-# Loose move detection
-doccompare old.pdf new.pdf --move-threshold 70
-
-# Skip move detection for large documents (faster)
-doccompare big_report_v1.pdf big_report_v2.pdf --no-moves -o report_diff.pdf
-
-# Verbose output for debugging
-doccompare a.docx b.docx --verbose
-```
-
-## Output
-
-The tool generates a PDF file containing:
-
-1. **Header** — file names and comparison timestamp
-2. **Summary box** — word counts for added, deleted, moved, and unchanged text
-3. **Legend** — color key
-4. **Full document diff** — the complete text of both documents merged, with differences highlighted
-
-## Limitations
-
-- Scanned PDFs (image-only, no text layer) are not supported. Run OCR first (e.g. with `ocrmypdf`).
-- Encrypted PDFs must be decrypted before comparison.
-- Complex table diffs show row-level changes only, not cell-level diffs.
-
-## Architecture
-
-```
-src/doccompare/
-├── cli.py              Entry point (Click command)
-├── models.py           Data classes (ParsedDocument, DiffElement, etc.)
-├── parsers/
-│   ├── base.py         Abstract parser interface
-│   ├── docx_parser.py  python-docx based parser
-│   └── pdf_parser.py   pdfplumber + PyMuPDF based parser
-├── comparison/
-│   ├── differ.py       LCS element matching + word-level diff
-│   ├── move_detector.py  Fuzzy move detection via rapidfuzz
-│   └── formatter.py    Formatting change detection
-└── rendering/
-    ├── html_builder.py HTML generation from diff result
-    ├── pdf_renderer.py WeasyPrint PDF rendering
-    └── styles.css      Report stylesheet
-```
-
-## Development
-
-```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Run a specific test file
-pytest tests/test_differ.py -v
-```
-
-## License
-
-MIT License. See LICENSE for details.
+De automatiska testerna kontrollerar innehåll och felhantering. De ersätter inte visuell granskning av referens-PDF:er. Se `docs/layout-quality.md` för provversionens valideringsstatus och kvarvarande arbete.
