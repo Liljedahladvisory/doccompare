@@ -23,7 +23,7 @@ def render_note(summary, original_name, modified_name):
     from weasyprint import HTML
     names = {'document': 'Dokument', 'header': 'Sidhuvud', 'footer': 'Sidfot',
              'footnotes': 'Fotnoter', 'endnotes': 'Slutnoter'}
-    kinds = {'ins': 'Tillagt', 'del': 'Borttaget', 'moveFrom': 'Flyttat från',
+    kinds = {'ins': 'Tillägg', 'del': 'Borttagning', 'moveFrom': 'Flyttat från',
              'moveTo': 'Flyttat till', 'rPrChange': 'Teckenformat',
              'pPrChange': 'Styckeformat', 'tblPrChange': 'Tabellformat',
              'tblGridChange': 'Tabellkolumner', 'trPrChange': 'Radformat',
@@ -40,59 +40,75 @@ def render_note(summary, original_name, modified_name):
             continue
         part = re.sub(r'\d+', '', r['part'].split('/')[-1].replace('.xml', ''))
         location = names.get(part, part)
-        if r['paragraph']:
-            location += f", stycke {r['paragraph']}"
         description = r['text'] or r.get('context') or 'Struktur eller formatering ändrad'
         if r.get('scope') == 'trPr':
-            location += ', tabellrad'
+            location = 'Tabellrad'
         rows.append(f'<tr><td>{escape(location)}</td><td>{escape(kinds.get(r["kind"], "Formatändring"))}</td><td>{escape(description)}</td></tr>')
-    details = ('<h2>Struktur, format och övriga dokumentdelar</h2>'
-               '<p>Styckenumren är interna positioner i jämförelsedokumentet, inte klausulnummer. '
-               'Words formatändringar kan även omfatta normalisering av dokumentformat.</p>'
+    details = ('<section class="details"><h2>Övriga ändringar</h2>'
                '<table><thead><tr><th>Plats</th><th>Ändring</th><th>Text / sammanhang</th></tr></thead><tbody>'
-               + ''.join(rows) + '</tbody></table>') if rows else ''
+               + ''.join(rows) + '</tbody></table></section>') if rows else ''
+    added_label = 'ord tillagt' if summary['added_words'] == 1 else 'ord tillagda'
+    deleted_label = 'ord borttaget' if summary['deleted_words'] == 1 else 'ord borttagna'
+    moved = summary['moved_words']
+    moved_label = 'ord flyttat' if moved == 1 else 'ord flyttade'
+    moved_stat = f'<p class="moved">{moved} {moved_label}</p>' if moved else ''
+    moved_legend = ('<p><span class="moved double">Flyttad text</span>: text som har flyttats inom dokumentet.</p>') if moved else ''
+    format_legend = ('<p><span class="format">Ändrad formatering</span>: exempelvis ändrat tecken- eller styckeformat.</p>') if summary['format_revision_count'] else ''
     html = f'''<!doctype html><html lang="sv"><meta charset="utf-8"><style>
-    @page {{size:A4; margin:22mm 20mm 20mm; @bottom-left {{content:"Liljedahl Advisory · DocCompare";font-size:8pt;color:#697580}}
-    @bottom-right {{content:"Jämförelsebilaga " counter(page);font-size:8pt;color:#697580}}}}
-    body {{font-family:"Arial",sans-serif;font-size:10pt;line-height:1.45;color:#243443}}
-    h1 {{font-size:24pt;line-height:1.1;margin:0 0 8mm;color:#162a3b}}
-    h2 {{font-size:12pt;margin:6mm 0 3mm;color:#162a3b}}
-    .eyebrow {{font-size:9pt;letter-spacing:1.4pt;color:#526977;margin-bottom:5mm}}
-    .meta {{border-top:1pt solid #9aabb5;border-bottom:1pt solid #d9e0e5;padding:4mm 0;overflow-wrap:anywhere}}
-    .stats {{font-size:14pt;margin:6mm 0}} .add {{color:#2e97d3;text-decoration:underline}} .del {{color:#b5082e;text-decoration:line-through}}
-    p {{margin:2mm 0}} .muted {{font-size:8.5pt;color:#536775}} .hash {{font-family:monospace;font-size:7pt;overflow-wrap:anywhere}}
-    table {{border-collapse:collapse;width:100%;font-size:8.5pt;table-layout:fixed}}
-    th,td {{text-align:left;vertical-align:top;padding:2mm 2mm;border-bottom:.5pt solid #d9e0e5;overflow-wrap:anywhere}}
-    th {{background:#edf1f4}} th:nth-child(1) {{width:25%}} th:nth-child(2) {{width:22%}} tr {{break-inside:avoid}} thead {{display:table-header-group}}
-    </style><body><div class="eyebrow">DOCCOMPARE / JÄMFÖRELSEBILAGA</div><h1>Jämförelseöversikt</h1>
-    <div class="meta"><p><b>Tidigare version:</b> {escape(original_name)}</p><p><b>Ny version:</b> {escape(modified_name)}</p>
-    <p><b>Skapad:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p></div>
-    <p class="stats">+{summary['added_words']} tillagda ord &nbsp; · &nbsp; −{summary['deleted_words']} borttagna ord</p>
-    <p>{summary['revision_count']} revisionsposter, varav {summary['format_revision_count']} format- eller celländringar.
-    Flyttad text: {summary['moved_words']} ord enligt Words flyttmarkeringar.</p>
-    <h2>Så läser du dokumentet</h2><p><span class="add">Blå, understruken text</span> har lagts till.
-    <span class="del">Röd, överstruken text</span> har tagits bort. Grön dubbelmarkering visar flyttad text när Word identifierar en flytt. Violett markerar ändrad formatering.</p>
-    <p>Dokumentets sidor har satts av Microsoft Word med ändringarna i löptexten.
-    Ändringarnas längd kan påverka rad- och sidbrytningar.</p>
-    <h2>Utförda kontroller</h2><p>Text, fältinstruktioner, länkmål, bildreferenser och cellgränser har stämts av i båda riktningarna:
-    accepterade ändringar mot den nya versionen och avvisade ändringar mot den tidigare versionen.</p>
-    <p class="muted">Kontrollen är ingen fullständig visuell avstämning. Granska särskilt numrering,
-    tabellgeometri, bilder och sidbrytningar före extern leverans. Ordräkningen summerar Words revisionsfragment.</p>
+    @page {{size:A4; margin:20mm; @bottom-left {{content:"DocCompare";font-family:Arial,sans-serif;font-size:8pt;color:#888}}
+    @bottom-right {{content:"Sammanfattning " counter(page) " av " counter(pages);font-family:Arial,sans-serif;font-size:8pt;color:#888}}}}
+    body {{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;font-size:10pt;line-height:1.45;color:#222;margin:0}}
+    h1 {{font-size:18pt;line-height:1.25;margin:0 0 8pt;color:#2c3e50}}
+    h2 {{font-size:12pt;margin:0 0 8pt;color:#2c3e50;break-after:avoid}}
+    p {{margin:0 0 5pt;orphans:2;widows:2}}
+    .meta {{font-size:9pt;color:#555;border-top:.6pt solid #bdc3c7;padding-top:8pt;margin-bottom:18pt}}
+    .meta p {{margin-bottom:3pt;overflow-wrap:anywhere}}
+    .stats {{font-size:11pt;margin-bottom:22pt;break-inside:avoid}}
+    .added {{color:#2e97d3}} .deleted {{color:#b5082e}} .moved {{color:#1a7a3f}} .format {{color:#633277}}
+    .underline {{text-decoration:underline}} .strike {{text-decoration:line-through}} .double {{text-decoration:underline double}}
+    .legend {{break-inside:avoid}} .details {{margin-top:22pt}}
+    table {{border-collapse:collapse;width:100%;font-size:9pt;table-layout:fixed}}
+    th,td {{text-align:left;vertical-align:top;padding:5pt 6pt 5pt 0;border-bottom:.5pt solid #e1e5e8;overflow-wrap:anywhere}}
+    th {{font-weight:600;color:#555}} th:nth-child(1) {{width:22%}} th:nth-child(2) {{width:22%}}
+    tr {{break-inside:avoid}} thead {{display:table-header-group}}
+    footer {{margin-top:24pt;border-top:.6pt solid #bdc3c7;padding-top:8pt;color:#888;font-size:8pt;break-inside:avoid}}
+    </style><body><h1>DocCompare – Sammanfattning</h1>
+    <div class="meta"><p><b>Original:</b> {escape(original_name)}</p><p><b>Modifierat:</b> {escape(modified_name)}</p>
+    <p><b>Datum:</b> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p></div>
+    <div class="stats"><p class="added">+{summary['added_words']} {added_label}</p>
+    <p class="deleted">−{summary['deleted_words']} {deleted_label}</p>{moved_stat}</div>
+    <section class="legend"><h2>Teckenförklaring</h2>
+    <p><span class="added underline">Tillagd text</span>: text som finns i den modifierade versionen men inte i originalet.</p>
+    <p><span class="deleted strike">Borttagen text</span>: text som finns i originalet men inte i den modifierade versionen.</p>
+    {moved_legend}{format_legend}
+    <p>Oförändrad text: text som är identisk i båda versionerna.</p></section>
     {details}
-    <h2>Spårbarhet</h2><p class="muted">Motor: Microsoft Word {escape(summary['word_version'])} · {summary['document_pages']} dokumentsidor.
-    Bilagan skapas separat och fogas sist utan att sätta om dokumentet.</p>
-    <p class="hash">Tidigare SHA-256: {summary['original_sha256']}<br>Ny SHA-256: {summary['modified_sha256']}</p>
+    <footer>Genererad av DocCompare · Liljedahl Advisory AB</footer>
     </body></html>'''
-    return HTML(string=html).write_pdf()
+    # Keep technical provenance available without placing it on the client-facing page.
+    writer = PdfWriter()
+    writer.append(PdfReader(BytesIO(HTML(string=html).write_pdf())), import_outline=False)
+    writer.add_metadata({
+        '/DocCompareOriginalSHA256': summary['original_sha256'],
+        '/DocCompareModifiedSHA256': summary['modified_sha256'],
+        '/DocCompareWordVersion': summary['word_version'],
+        '/DocCompareValidation': summary.get('validation', 'not-provided'),
+    })
+    result = BytesIO()
+    writer.write(result)
+    return result.getvalue()
 
 
 def assemble_pdf(main_pdf, note, destination):
     main = validate_pdf(main_pdf)
     writer = PdfWriter()
     writer.append(main, import_outline=False)
-    writer.append(PdfReader(BytesIO(note)), import_outline=False)
+    note_reader = PdfReader(BytesIO(note))
+    writer.append(note_reader, import_outline=False)
     writer.add_outline_item('Jämförelsedokument', 0)
-    writer.add_outline_item('Jämförelsebilaga', len(main.pages))
+    writer.add_outline_item('Sammanfattning', len(main.pages))
+    writer.add_metadata({key: value for key, value in (note_reader.metadata or {}).items()
+                         if key.startswith('/DocCompare') and isinstance(value, str)})
     writer.add_metadata({'/Title': 'DocCompare – dokumentjämförelse', '/Creator': 'DocCompare / Microsoft Word'})
     with open(destination, 'wb') as stream:
         writer.write(stream)

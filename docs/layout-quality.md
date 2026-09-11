@@ -1,5 +1,13 @@
 # Exportkedja 0.3.0a1: lokal provversion
 
+## Sammanfattning 0.3.0a2
+
+Efter Svantes granskning har sammanfattningen fått ett kompakt upplägg med inspiration från den tidigare versionen: mindre rubrik, filnamn och datum, färgkodade ändringsantal på egna rader och kort teckenförklaring. Övriga ändringar visas vid behov i en enkel tabell. Filhashar, Word-version och kontrollstatus finns i PDF-metadata. Ingen separat uppskattning av oförändrade ord har återinförts.
+
+Verifiering av denna ändring: 32 ordinarie tester godkända; de 15 testerna mot riktig Word kördes inte på nytt för denna presentationsändring. Prov-PDF:en genererades av den nya appens paketerade rapportmodul. Dess två dokumentsidor har exakt samma innehållsströmmar och sidstorlek som den tidigare godkända prov-PDF:en. Den nya sammanfattningen är en sida. Långa filnamn och en tabell med 40 ändringsrader har också renderats och granskats över två sidor. Slutfilen har öppnats i Förhandsvisning och apparkivets signatur verifierats.
+
+ckglib kartlade `quality_report.render_note` och dess anrop före ändringen. Funktionen behåller sitt gränssnitt, så service, CLI, adapter och integrationstester behövde inga ändringar. Metadataöverföringen i `assemble_pdf` granskades i samma modul. De två versionsfiler som ckglib markerade utanför planen är granskade versionshöjningar till 0.3.0a2. Jämförelsemotorn och begränsningarna för ordinarie release nedan är oförändrade.
+
 Status 2026-09-11: den ombyggda motorn är implementerad och provad mot Microsoft Word 16.112 på macOS. Den ordinarie installerade appen har inte ersatts. Inga ändringar har publicerats i GitHub eller distribuerats till andra användare.
 
 ## Implementerat
