@@ -57,7 +57,6 @@ def render_note(summary, original_name, modified_name):
     moved_label = 'ord flyttat' if moved == 1 else 'ord flyttade'
     moved_stat = f'<p class="moved">{moved} {moved_label}</p>' if moved else ''
     moved_legend = ('<p><span class="moved double">Flyttad text</span>: text som har flyttats inom dokumentet.</p>') if moved else ''
-    format_legend = ('<p><span class="format">Ändrad formatering</span>: exempelvis ändrat tecken- eller styckeformat.</p>') if summary['format_revision_count'] else ''
     missing_links = summary.get('unavailable_internal_links', 0)
     link_note = (f'<p class="link-note">{missing_links} interna länkar saknar ett giltigt mål i Words PDF-export. '
                  'Länktexten finns kvar, men dessa länkar går inte att klicka på.</p>') if missing_links else ''
@@ -71,7 +70,7 @@ def render_note(summary, original_name, modified_name):
     .meta {{font-size:9pt;color:#555;border-top:.6pt solid #bdc3c7;padding-top:8pt;margin-bottom:18pt}}
     .meta p {{margin-bottom:3pt;overflow-wrap:anywhere}}
     .stats {{font-size:11pt;margin-bottom:22pt;break-inside:avoid}}
-    .added {{color:#2e97d3}} .deleted {{color:#b5082e}} .moved {{color:#1a7a3f}} .format {{color:#633277}}
+    .added {{color:#2e97d3}} .deleted {{color:#b5082e}} .moved {{color:#1a7a3f}}
     .underline {{text-decoration:underline}} .strike {{text-decoration:line-through}} .double {{text-decoration:underline double}}
     .legend {{break-inside:avoid}} .link-note {{margin-top:12pt;color:#555}}
     footer {{margin-top:24pt;border-top:.6pt solid #bdc3c7;padding-top:8pt;color:#888;font-size:8pt;break-inside:avoid}}
@@ -83,7 +82,7 @@ def render_note(summary, original_name, modified_name):
     <section class="legend"><h2>Teckenförklaring</h2>
     <p><span class="added underline">Tillagd text</span>: text som finns i den modifierade versionen men inte i originalet.</p>
     <p><span class="deleted strike">Borttagen text</span>: text som finns i originalet men inte i den modifierade versionen.</p>
-    {moved_legend}{format_legend}
+    {moved_legend}
     <p>Oförändrad text: text som är identisk i båda versionerna.</p></section>
     {link_note}
     <footer>Genererad av DocCompare · a Liljedahl Legal Tech product</footer>

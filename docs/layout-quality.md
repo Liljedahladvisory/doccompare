@@ -1,4 +1,12 @@
-# Exportkedja 0.3.0a9: lokal installation
+# Exportkedja 0.3.0a10: lokal installation
+
+## Formateringsmarkeringar dolda i 0.3.0a10
+
+Svante vill se textändringar utan separat markering av formateringsändringar. Word-exporten använder därför `revised properties mark none` och `show format changes false` på arbetsdokumentets vy. Formatdetektering behålls för kvalitetskontroll och revisionsunderlag, inklusive tabellgeometri. Tillägg, borttagningar och flyttar visas som tidigare. Den lila formateringsposten har tagits bort ur teckenförklaringen. De tillfälliga globala Word-inställningarna återställs efter körningen.
+
+Alla 61 tester godkändes på nytt, inklusive 16 mot riktig Word. Verksamhetsdokumentparet kördes på nytt genom slutpaketets faktiska bootstrap och gav 24 PDF-sidor (23 dokumentsidor och en sammanfattning), +1675/-1092 ord och godkänd projektionskontroll. En dokumentsida med både formatering och textändringar samt sammanfattningen renderades och granskades visuellt: ingen lila formatmarkering, textändringarnas färger kvar. Ingen ändring gjordes i källdokumenten.
+
+ckglib kartlade Word-anropet; rapportfunktionen är också granskad i föregående presentationsändring. Samma gränssnitt behålls i service, CLI, adapter och befintliga tester. Rapportens teckenförklaring, versionsfiler och dokumentation är avsiktliga kompletteringar utanför Word-funktionens smala anropsplan. Version 0.3.0a10 har installerats med signatur-, käll- och bootstrapkontroll samt återställningskopia av 0.3.0a9.
 
 ## Kortare sammanfattning 0.3.0a9
 

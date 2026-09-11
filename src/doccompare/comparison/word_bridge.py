@@ -50,7 +50,7 @@ def comparison_script(folder, author):
         'move to text mark': 'move to text mark double underline',
         'revised lines color': 'black', 'revised lines mark': 'revised lines mark outside border',
         'revised properties color': 'violet',
-        'revised properties mark': 'revised properties mark color only',
+        'revised properties mark': 'revised properties mark none',
     }
     saved = ', '.join(key + ' of settings' for key in display_settings)
     setup = '\n'.join(f'        set {key} of settings to {value}' for key, value in display_settings.items())
@@ -97,6 +97,8 @@ tell application "Microsoft Word"
         set revisions mode of view of active window of document resultName to in line revisions
         set revisions view of view of active window of document resultName to revisions view final
         set show revisions and comments of view of active window of document resultName to true
+        -- Keep format revisions for validation but hide them in the report.
+        set show format changes of view of active window of document resultName to false
         save as document resultName file name {tracked} file format format document add to recent files false
         set resultName to my waitForDocument({tracked}, {apple_string(folder.name + "-tracked.docx")})
         repaginate document resultName

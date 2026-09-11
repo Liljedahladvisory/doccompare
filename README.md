@@ -2,7 +2,7 @@
 
 DocCompare jämför två rena `.docx`-versioner och skapar en PDF med ändringar i löptexten. Den nya exportkedjan använder Microsoft Word för både jämförelse och sidlayout. GUI och CLI anropar samma tjänst.
 
-Denna gren är en **provversion av den ombyggda exportkedjan**. Version 0.3.0a9 är lokalt installerad och verifierad på ett verksamhetsdokumentpar samt 61 automatiska tester, varav 16 mot riktig Word. Fortsatt granskning av fler representativa dokument behövs. Äldre provbyggen till och med 0.3.0a6 hade ett importfel i Mac-appens paketering. Version 0.3.0a8 rättar även kontroll av kvarlämnade tomma tabellkolumner och hantering av ogiltiga interna länkar i Words PDF-export. Se [verifiering och begränsningar](docs/layout-quality.md).
+Denna gren är en **provversion av den ombyggda exportkedjan**. Version 0.3.0a10 är lokalt installerad och verifierad på ett verksamhetsdokumentpar samt 61 automatiska tester, varav 16 mot riktig Word. Fortsatt granskning av fler representativa dokument behövs. Äldre provbyggen till och med 0.3.0a6 hade ett importfel i Mac-appens paketering. Version 0.3.0a8 rättar även kontroll av kvarlämnade tomma tabellkolumner och hantering av ogiltiga interna länkar i Words PDF-export. Se [verifiering och begränsningar](docs/layout-quality.md).
 
 ## Användning
 
