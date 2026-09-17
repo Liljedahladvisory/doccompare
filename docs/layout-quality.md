@@ -1,4 +1,20 @@
-# Exportkedja 0.3.0a10: lokal installation
+# Exportkedja 0.3.0a11: lokal installation
+
+## Word-export och ärvda sidfötter i 0.3.0a11
+
+Ett nytt verksamhetsdokumentpar reproducerade två oberoende Word-problem. Jämförelsen kunde sparas som DOCX, men PDF-exporten returnerade -1708. Dessutom förlorade den accepterade kontrollkopian en ärvd sidfotsreferens när ett tidigare avsnitt togs bort. Båda källorna kunde exporteras separat. Att dölja markeringar, låsa fält, stänga av fältuppdatering, öppna om jämförelsen eller normalisera källkopiorna med Word löste inte problemen.
+
+Kontrollkopian gör nu befintliga sidhuvuds-/sidfotsreferenser uttryckliga i varje ärvande avsnitt. Den effektiva innehållsprojektionen måste vara identisk före och efter detta steg. Historiska avsnittsegenskaper och själva jämförelsedokumentet lämnas orörda. Word accepterar/avvisar sedan ändringarna i kontrollkopiorna. Kontrollen jämför sidhuvuden/sidfötter per avsnitt och variant i stället för att räkna ZIP-delar; saknade, omkastade och felkopplade texter stoppas fortfarande.
+
+PDF-export sker först efter godkända källkontroller. Endast vid Words specifika -1708-fel provas en separat exportkopia där säkert avgränsade, ändrade komplexa fält återges med sina befintliga visningsvärden. Bara fältkontrollnoder tas bort: visad text, textrevisioner, stycken, tabeller, bilder och formatering behålls. PAGE/NUMPAGES/SECTIONPAGES förblir aktiva. Fält utan separerbart visningsvärde, exempelvis vissa MACROBUTTON-fält eller nästlade instruktioner, lämnas aktiva. Ett kvarstående fel stoppar körningen. Åtgärden redovisas i sammanfattning och PDF-metadata. Ingen originalfil ändras och en befintlig PDF ersätts fortfarande först efter samtliga kontroller.
+
+Verifiering: **80 tester godkända, varav 18 mot riktig Word**. De nya regressionerna omfattar separat fältexport, oförändrade källor och layoutnoder, pagineringsfält, osäkra fält, fel utan återförsök, högst ett exportåterförsök, ärvda sidfötter efter avsnittsborttagning samt saknade/omkastade sidhuvuds- och sidfotskopplingar. Ett Word-test injicerar -1708 enbart på första PDF-försöket och verifierar därefter verklig Word-export av fältkopian; det är inte ett påstående om att varje Word-version ger samma fel på den syntetiska filen.
+
+Det nya verkliga dokumentparet gav 60 dokumentsidor och en sammanfattningssida med båda källprojektionerna godkända. Paketets faktiska py2app-bootstrap kontrollerar nu även de två nya hjälparmodulerna. Åtta representativa sidor inklusive sammanfattning granskades visuellt. Verksamhetsdokument och diagnostik ingår inte i repot. Full kompatibilitet med alla Word-filer är inte fastställd; tidigare avgränsningar för .docx, befintliga revisioner och inbäddade objekt kvarstår.
+
+Paketets verkliga startkod kördes även på de sparade källkopiorna från det tidigare verksamhetsdokumentparet: 24 sidor och oförändrade ändringsantal. Den ursprungliga nya källfilen från det tidigare paret hade flyttats; återtestet använde de bevarade arbetskopiorna. Version 0.3.0a11 har installerats med verifierad signatur, källöverensstämmelse och verkliga bootstrap-importer. Den installerade appens egen runtime körde därefter det nya dokumentparet till användarens valda resultatplats med godkända kontroller och oförändrade källhashar. 0.3.0a10 finns som återställningskopia. GUI-fönstret visar rätt version; hela Tk-klickflödet är fortfarande inte automatiskt verifierat.
+
+ckglib kartlade Word-bryggan, projektionerna och rapportfunktionen före ändring. Efterkontrollen flaggade nya hjälparmoduler, deras regressionstester, versioner, verifieringsskript och dokumentation utanför tjänstens bakåtriktade anropsplan; dessa är avsiktliga och manuellt granskade. Verifieringsskriptets kod på modulnivå granskades efter parservarningen. GUI, CLI och adapter behöver ingen ändring eftersom tjänstens anropsgränssnitt och resultatnycklar behålls.
 
 ## Formateringsmarkeringar dolda i 0.3.0a10
 

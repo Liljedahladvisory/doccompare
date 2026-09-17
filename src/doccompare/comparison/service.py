@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 from .revisions import preflight, revision_ledger, summarize, verify_projections
-from .word_bridge import run_comparison, word_lock, word_workspace
+from .word_bridge import run_comparison, export_document, word_lock, word_workspace
 from doccompare.rendering.quality_report import assemble_pdf, render_note, validate_pdf, remove_broken_internal_links
 
 
@@ -32,7 +32,7 @@ def compare_documents(original, modified, output, *, author='DocCompare',
             shutil.copyfile(source, file(name))
             # Validate the snapshot, not just a file that may have changed since preflight.
             preflight(file(name))
-        status('Jämför och exporterar med Microsoft Word…')
+        status('Jämför med Microsoft Word…')
         version = run_comparison(folder, author)
         status('Kontrollerar resultatet mot båda källversionerna…')
         column_notes = verify_projections(file('original.docx'), file('modified.docx'),
@@ -46,6 +46,8 @@ def compare_documents(original, modified, output, *, author='DocCompare',
                 'context': f'Tabell {note["table"]}: {note["old_columns"]} → {note["new_columns"]} kolumner.',
             })
         summary['column_validation_notes'] = column_notes
+        status('Exporterar den kontrollerade jämförelsen med Microsoft Word…')
+        summary.update(export_document(folder))
         document_pdf = validate_pdf(file('document.pdf'))
         summary['unavailable_internal_links'] = remove_broken_internal_links(document_pdf)
         summary.update(word_version=version, document_pages=len(document_pdf.pages),

@@ -2,7 +2,7 @@
 
 DocCompare jämför två rena `.docx`-versioner och skapar en PDF med ändringar i löptexten. Den nya exportkedjan använder Microsoft Word för både jämförelse och sidlayout. GUI och CLI anropar samma tjänst.
 
-Denna gren är en **provversion av den ombyggda exportkedjan**. Version 0.3.0a10 är lokalt installerad och verifierad på ett verksamhetsdokumentpar samt 61 automatiska tester, varav 16 mot riktig Word. Fortsatt granskning av fler representativa dokument behövs. Äldre provbyggen till och med 0.3.0a6 hade ett importfel i Mac-appens paketering. Version 0.3.0a8 rättar även kontroll av kvarlämnade tomma tabellkolumner och hantering av ogiltiga interna länkar i Words PDF-export. Se [verifiering och begränsningar](docs/layout-quality.md).
+Denna gren är en **provversion av den ombyggda exportkedjan**. Version 0.3.0a11 hanterar ytterligare Word-fel vid export av ändrade fält och vid kontroll av ärvda sidhuvuden/sidfötter. Dokument behandlas lokalt. Se [verifiering och begränsningar](docs/layout-quality.md).
 
 ## Användning
 
@@ -18,7 +18,7 @@ Stäng eventuella modala Word-dialoger innan jämförelsen startas. Word arbetar
 - Blå understrykning: tillagd text.
 - Röd överstrykning: borttagen text.
 - Grön dubbelmarkering: flyttad text, när Word identifierar en flytt.
-- Violett: ändrad formatering. Struktur och andra dokumentdelar beskrivs även i bilagan.
+- Formateringsändringar markeras inte separat.
 
 Word sätter dokumentsidorna. En separat svensk jämförelsebilaga fogas sist utan att sätta om dem. Längre ändringar kan ge andra rad- och sidbrytningar än i en ren källversion.
 
@@ -26,15 +26,15 @@ Word sätter dokumentsidorna. En separat svensk jämförelsebilaga fogas sist ut
 
 1. Granska DOCX-paketen och stoppa redan spårade ändringar eller uttryckligen otillåtna objekt.
 2. Jämför arbetskopiorna i Word med formatändringar aktiverade.
-3. Spara Words redline och exportera den med ändringar i löptexten.
-4. Låt Word acceptera respektive avvisa ändringarna i separata kontrollkopior.
+3. Spara Words redline. Gör ärvda sidhuvuds-/sidfotsreferenser uttryckliga i en separat kontrollkopia, utan att ändra deras effektiva innehåll.
+4. Låt Word acceptera respektive avvisa ändringarna i kontrollkopior.
 5. Stäm av text, fältinstruktioner, länkmål, bildreferenser och stycke-/tabellgränser mot respektive källa. Beräknade fältresultat och tomma stycken normaliseras i denna kontroll.
-6. Läs statistiken från Words faktiska revisioner. Det finns ingen separat approximativ diff som kan ge andra statistikvärden.
+6. Läs statistiken från Words faktiska revisioner och exportera med Word först efter godkänd kontroll. Vid det specifika exportfelet -1708 får Word ett nytt försök med säkert avgränsade, ändrade fälts befintliga visningsvärden i en separat exportkopia. Text, revisionsmarkeringar och layout behålls. Sidnummerfält förblir aktiva; fält utan ett säkert separerbart visningsvärde lämnas oförändrade. Åtgärden anges i sammanfattning och PDF-metadata.
 7. Validera PDF och kontrollera att sidformat och sidornas innehållsströmmar överlever sammanfogningen oförändrade. Publicera lokalt genom atomiskt filbyte först när alla steg lyckats.
 
 Ett misslyckande lämnar en befintlig resultatfil orörd. Appen växlar inte tyst till HTML- eller egen OOXML-sättning. Den äldre motorn finns kvar för dess tidigare tester men används inte av GUI, CLI eller adapterfasaden.
 
-Kontrollerna är **inte en fullständig visuell eller semantisk bevisning**. Bland annat jämförs inte all style-arv, numrering, tabellgeometri eller placering av sidhuvuden mellan avsnitt automatiskt. Bildreferenser jämförs efter innehåll, men inte all bildgeometri. Word kan normalisera format och kan klassificera en flytt som borttagning plus tillägg. Granska verksamhetskritiska resultat visuellt före extern leverans. För redan spårade dokument behövs ett framtida, uttryckligt val av jämförelsebas.
+Kontrollerna är **inte en fullständig visuell eller semantisk bevisning**. Bland annat jämförs inte all style-arv, numrering, tabellgeometri automatiskt. Sidhuvudens och sidfötternas effektiva innehåll kontrolleras per avsnitt och variant, men inte deras exakta grafiska placering. Bildreferenser jämförs efter innehåll, men inte all bildgeometri. Word kan normalisera format och kan klassificera en flytt som borttagning plus tillägg. Granska verksamhetskritiska resultat visuellt före extern leverans. För redan spårade dokument behövs ett framtida, uttryckligt val av jämförelsebas.
 
 ## Arkitektur
 

@@ -60,6 +60,8 @@ def render_note(summary, original_name, modified_name):
     missing_links = summary.get('unavailable_internal_links', 0)
     link_note = (f'<p class="link-note">{missing_links} interna länkar saknar ett giltigt mål i Words PDF-export. '
                  'Länktexten finns kvar, men dessa länkar går inte att klicka på.</p>') if missing_links else ''
+    field_note = ('<p class="link-note">Ändrade korsreferenser och andra fält återges med sina '
+                  'visningsvärden från Word-jämförelsen.</p>') if summary.get('frozen_fields') else ''
     html = f'''<!doctype html><html lang="sv"><meta charset="utf-8"><style>
     @page {{size:A4; margin:20mm; @bottom-left {{content:"DocCompare";font-family:Arial,sans-serif;font-size:8pt;color:#888}}
     @bottom-right {{content:"Sammanfattning " counter(page) " av " counter(pages);font-family:Arial,sans-serif;font-size:8pt;color:#888}}}}
@@ -85,6 +87,7 @@ def render_note(summary, original_name, modified_name):
     {moved_legend}
     <p>Oförändrad text: text som är identisk i båda versionerna.</p></section>
     {link_note}
+    {field_note}
     <footer>Genererad av DocCompare · a Liljedahl Legal Tech product</footer>
     </body></html>'''
     # Keep technical provenance available without placing it on the client-facing page.
@@ -95,6 +98,8 @@ def render_note(summary, original_name, modified_name):
         '/DocCompareModifiedSHA256': summary['modified_sha256'],
         '/DocCompareWordVersion': summary['word_version'],
         '/DocCompareValidation': summary.get('validation', 'not-provided'),
+        '/DocCompareExportMode': summary.get('export_mode', 'word-native'),
+        '/DocCompareFrozenFields': str(summary.get('frozen_fields', 0)),
     })
     result = BytesIO()
     writer.write(result)

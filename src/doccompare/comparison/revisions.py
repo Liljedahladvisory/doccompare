@@ -199,8 +199,10 @@ def content_projection(path):
 
 
 def _project_stories(path, parts):
+    parts = dict(parts)
     stories = []
-    for part, tree in parts:
+    by_part = {}
+    for part, tree in parts.items():
         family = re.sub(r'\d+', '', Path(part).stem)
         tokens = []
         relationships = _relationships(path, part)
@@ -214,8 +216,36 @@ def _project_stories(path, parts):
                     tokens.append(('p', value))
             elif tag in {'tr', 'tc'}:
                 tokens.append(('row' if tag == 'tr' else 'cell', ''))
-        if tokens:
+        by_part[part] = tuple(tokens)
+        if tokens and family not in {'header', 'footer'}:
             stories.append((family, tuple(tokens)))
+    # Word may merge identical header/footer ZIP parts on save. Compare the
+    # effective content for every section and variant, not the part count.
+    # Section identities also detect swapped, missing and misrouted stories.
+    document = parts.get('word/document.xml')
+    if document is not None:
+        with zipfile.ZipFile(path) as archive:
+            relfile = 'word/_rels/document.xml.rels'
+            rels = etree.fromstring(archive.read(relfile)) if relfile in archive.namelist() else []
+        targets = {rel.get('Id'): posixpath.normpath(posixpath.join('word', rel.get('Target', ''))).lstrip('/')
+                   for rel in rels if rel.get('TargetMode') != 'External'}
+        effective = {}
+        sections = [s for s in document.iter(f'{{{W}}}sectPr')
+                    if not any(local(a) in PROPERTY_REVISIONS for a in s.iterancestors())]
+        for index, section in enumerate(sections):
+            for ref in section:
+                tag = local(ref)
+                if tag not in {'headerReference', 'footerReference'}:
+                    continue
+                rid = ref.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')
+                target = targets.get(rid)
+                family = tag.removesuffix('Reference')
+                if target not in by_part or not Path(target).name.startswith(family):
+                    raise ComparisonQualityError('En sidhuvuds- eller sidfotsreferens saknar innehåll.')
+                effective[(family, ref.get(f'{{{W}}}type', 'default'))] = by_part[target]
+            for (family, variant), tokens in effective.items():
+                if tokens:
+                    stories.append((family, (('section', f'{index}:{variant}'),) + tokens))
     return Counter(stories)
 
 

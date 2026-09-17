@@ -91,7 +91,7 @@ def test_field_results_can_recalculate_but_instructions_cannot_change(tmp_path):
     assert content_projection(path) != expected
 
 
-@pytest.mark.parametrize('stage', ['word', 'projection', 'report', 'assemble'])
+@pytest.mark.parametrize('stage', ['word', 'projection', 'export', 'report', 'assemble'])
 def test_failed_job_keeps_previous_result_and_cleans_working_copies(tmp_path, monkeypatch, stage):
     old, new = docx(tmp_path, 'old.docx'), docx(tmp_path, 'new.docx')
     output = tmp_path / 'result.pdf'
@@ -112,6 +112,7 @@ def test_failed_job_keeps_previous_result_and_cleans_working_copies(tmp_path, mo
         return 'test'
     monkeypatch.setattr(service, 'run_comparison', fail if stage == 'word' else run)
     monkeypatch.setattr(service, 'verify_projections', fail if stage == 'projection' else lambda *a, **k: [])
+    monkeypatch.setattr(service, 'export_document', fail if stage == 'export' else lambda *a: {})
     monkeypatch.setattr(service, 'validate_pdf', lambda *a: type('PDF', (), {'pages': [1]})())
     monkeypatch.setattr(service, 'remove_broken_internal_links', lambda *a: 0)
     monkeypatch.setattr(service, 'render_note', fail if stage == 'report' else lambda *a: b'note')

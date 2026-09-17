@@ -166,3 +166,67 @@ def test_native_roundtrip_and_pdf(tmp_path, scenario):
         assert 'NY RAD' in text
     if scenario == 'row_deleted':
         assert 'Förberedelse' in text  # deletion must still be visible
+
+
+def add_field(paragraph, instruction, value):
+    for kind, text in [('fldChar', 'begin'), ('instrText', instruction),
+                       ('fldChar', 'separate'), ('t', value), ('fldChar', 'end')]:
+        run = paragraph.add_run()._r
+        element = OxmlElement('w:' + kind)
+        if kind == 'fldChar':
+            element.set(qn('w:fldCharType'), text)
+        else:
+            element.text = text
+        run.append(element)
+
+
+def test_deleted_sections_keep_inherited_footer(tmp_path):
+    from docx.enum.section import WD_SECTION
+    old, new = tmp_path / 'old.docx', tmp_path / 'new.docx'
+    for path, extra in [(old, True), (new, False)]:
+        doc = Document()
+        doc.add_paragraph('Försättsblad')
+        if extra:
+            doc.add_section(WD_SECTION.NEW_PAGE)
+            doc.add_paragraph('Avsnitt som ska tas bort.')
+        section = doc.add_section(WD_SECTION.NEW_PAGE)
+        doc.add_paragraph('Avtalets fortsättning.')
+        if not extra:
+            for footer in [section.footer, section.even_page_footer]:
+                footer.is_linked_to_previous = False
+                p = footer.paragraphs[0]
+                add_field(p, ' PAGE ', '1')
+                p.add_run(' / ')
+                add_field(p, ' NUMPAGES ', '2')
+        doc.save(path)
+    result = compare_documents(old, new, tmp_path / 'sections.pdf')
+    assert result['validation'] == 'text-projections-passed'
+    assert result['deleted_words'] > 0
+
+
+def test_real_word_field_snapshot_recovery(tmp_path, monkeypatch):
+    from doccompare.comparison import word_bridge
+    old, new = tmp_path / 'old.docx', tmp_path / 'new.docx'
+    doc = base_document()
+    doc.save(old)
+    p = doc.add_paragraph('Dokumentets titel: ')
+    add_field(p, ' TITLE ', 'Syntetiskt fälttest')
+    doc.core_properties.title = 'Syntetiskt fälttest'
+    doc.save(new)
+    run = word_bridge._run_script
+    attempts = []
+    def fail_first_pdf(script):
+        if 'file format format PDF' in script:
+            attempts.append(script)
+            if len(attempts) == 1:
+                raise word_bridge.WordScriptError('synthetic PDF-only failure (-1708)')
+        return run(script)
+    monkeypatch.setattr(word_bridge, '_run_script', fail_first_pdf)
+    output = tmp_path / 'fields.pdf'
+    result = compare_documents(old, new, output)
+    assert result['validation'] == 'text-projections-passed'
+    assert result['export_mode'] == 'word-field-snapshot'
+    assert result['frozen_fields'] > 0
+    assert len(attempts) == 2
+    text = '\n'.join(p.extract_text() for p in PdfReader(output).pages)
+    assert 'Syntetiskt fälttest' in text

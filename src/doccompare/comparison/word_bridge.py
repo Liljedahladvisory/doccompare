@@ -38,7 +38,7 @@ def word_lock(root, timeout=180):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def comparison_script(folder, author):
+def comparison_script(folder, author, *, export_source=None, projection_source=None):
     old, new, tracked, pdf, accepted, rejected = [apple_string(folder / (folder.name + '-' + name)) for name in (
         'original.docx', 'modified.docx', 'tracked.docx', 'document.pdf', 'accepted.docx', 'rejected.docx')]
     display_settings = {
@@ -58,6 +58,57 @@ def comparison_script(folder, author):
                         for i, key in enumerate(display_settings, 1))
     cleanup = '\n'.join(f'    my closeOwnedDocument({apple_string(folder / (folder.name + "-" + name))}, {apple_string(folder.name + "-" + name)})'
                         for name in ('original.docx', 'modified.docx', 'tracked.docx', 'accepted.docx', 'rejected.docx'))
+    display = """        set print revisions of document resultName to true
+        set show revisions of document resultName to true
+        set revisions mode of view of active window of document resultName to in line revisions
+        set revisions view of view of active window of document resultName to revisions view final
+        set show revisions and comments of view of active window of document resultName to true
+        set show format changes of view of active window of document resultName to false"""
+    if export_source is None and projection_source is None:
+        operation = f'''        open POSIX file {old} add to recent files false
+        set sourceName to my waitForDocument({old}, {apple_string(folder.name + "-original.docx")})
+        compare document sourceName path {new} author name {apple_string(author)} target compare target current detect format changes true ignore all comparison warnings false add to recent files false
+        set resultName to sourceName
+        set sourceName to ""
+{display}
+        save as document resultName file name {tracked} file format format document add to recent files false
+        set resultName to my waitForDocument({tracked}, {apple_string(folder.name + "-tracked.docx")})
+        close document resultName saving no
+        set resultName to ""
+'''
+    elif projection_source is not None:
+        projection_path = apple_string(projection_source)
+        projection_name = apple_string(Path(projection_source).name)
+        cleanup += f'\n    my closeOwnedDocument({projection_path}, {projection_name})'
+        operation = f'''        open POSIX file {projection_path} add to recent files false
+        set resultName to my waitForDocument({projection_path}, {projection_name})
+        accept all revisions document resultName
+        save as document resultName file name {accepted} file format format document add to recent files false
+        set resultName to my waitForDocument({accepted}, {apple_string(folder.name + "-accepted.docx")})
+        close document resultName saving no
+        set resultName to ""
+        open POSIX file {projection_path} add to recent files false
+        set resultName to my waitForDocument({projection_path}, {projection_name})
+        reject all revisions document resultName
+        save as document resultName file name {rejected} file format format document add to recent files false
+        set resultName to my waitForDocument({rejected}, {apple_string(folder.name + "-rejected.docx")})
+        close document resultName saving no
+        set resultName to ""
+        if sourceName is not "" then close document sourceName saving no
+        set sourceName to ""
+'''
+    else:
+        export_source = Path(export_source)
+        export_path = apple_string(export_source)
+        export_name = apple_string(export_source.name)
+        cleanup += f'\n    my closeOwnedDocument({export_path}, {export_name})'
+        operation = f'''        open POSIX file {export_path} add to recent files false
+        set resultName to my waitForDocument({export_path}, {export_name})
+{display}
+        repaginate document resultName
+        save as document resultName file name {pdf} file format format PDF add to recent files false
+        close document resultName saving no
+        set resultName to ""'''
     # All paths live in a unique directory inside Office's sandbox. Even when
     # opening an arbitrary user path works, saving there can return -1708.
     return f'''
@@ -87,36 +138,7 @@ tell application "Microsoft Word"
     set savedSettings to {{{saved}}}
     try
 {setup}
-        open POSIX file {old} add to recent files false
-        set sourceName to my waitForDocument({old}, {apple_string(folder.name + "-original.docx")})
-        compare document sourceName path {new} author name {apple_string(author)} target compare target current detect format changes true ignore all comparison warnings false add to recent files false
-        set resultName to sourceName
-        set sourceName to ""
-        set print revisions of document resultName to true
-        set show revisions of document resultName to true
-        set revisions mode of view of active window of document resultName to in line revisions
-        set revisions view of view of active window of document resultName to revisions view final
-        set show revisions and comments of view of active window of document resultName to true
-        -- Keep format revisions for validation but hide them in the report.
-        set show format changes of view of active window of document resultName to false
-        save as document resultName file name {tracked} file format format document add to recent files false
-        set resultName to my waitForDocument({tracked}, {apple_string(folder.name + "-tracked.docx")})
-        repaginate document resultName
-        save as document resultName file name {pdf} file format format PDF add to recent files false
-        accept all revisions document resultName
-        save as document resultName file name {accepted} file format format document add to recent files false
-        set resultName to my waitForDocument({accepted}, {apple_string(folder.name + "-accepted.docx")})
-        close document resultName saving no
-        set resultName to ""
-        open POSIX file {tracked} add to recent files false
-        set resultName to my waitForDocument({tracked}, {apple_string(folder.name + "-tracked.docx")})
-        reject all revisions document resultName
-        save as document resultName file name {rejected} file format format document add to recent files false
-        set resultName to my waitForDocument({rejected}, {apple_string(folder.name + "-rejected.docx")})
-        close document resultName saving no
-        set resultName to ""
-        if sourceName is not "" then close document sourceName saving no
-        set sourceName to ""
+{operation}
         set resultVersion to application version
     on error messageText number errorNumber
         try
@@ -136,8 +158,11 @@ end tell
 '''
 
 
-def run_comparison(folder, author='DocCompare'):
-    script = comparison_script(Path(folder), author)
+class WordScriptError(RuntimeError):
+    """A Word automation failure, retained for narrowly scoped export recovery."""
+
+
+def _run_script(script):
     script = script.replace('\ntell application', '\nwith timeout of 150 seconds\ntell application', 1) + '\nend timeout'
     try:
         # Word receives its own shorter timeout so its error handler restores
@@ -151,8 +176,48 @@ def run_comparison(folder, author='DocCompare'):
         if '-1743' in result.stderr:
             raise RuntimeError('Tillåt DocCompare att styra Microsoft Word under '
                                'Systeminställningar > Integritet och säkerhet > Automation.')
-        raise RuntimeError('Word-jämförelsen misslyckades: ' + result.stderr.strip())
-    for name in ('tracked.docx', 'document.pdf', 'accepted.docx', 'rejected.docx'):
+        raise WordScriptError('Word kunde inte slutföra åtgärden: ' + result.stderr.strip())
+    return result.stdout.strip()
+
+
+def run_comparison(folder, author='DocCompare'):
+    from .story_projection import prepare_projection_copy
+    folder = Path(folder)
+    version = _run_script(comparison_script(folder, author))
+    tracked = folder / (folder.name + '-tracked.docx')
+    projection = folder / (folder.name + '-projection.docx')
+    prepare_projection_copy(tracked, projection)
+    _run_script(comparison_script(folder, author, projection_source=projection))
+    for name in ('tracked.docx', 'accepted.docx', 'rejected.docx'):
         if not (Path(folder) / (Path(folder).name + '-' + name)).is_file():
             raise RuntimeError(f'Word skapade inte den förväntade arbetsfilen {name}.')
-    return result.stdout.strip()
+    return version
+
+
+def export_document(folder):
+    """Render only after the untouched comparison passes both source checks.
+
+    Word can reject PDF export of revised complex fields (-1708). Retry once
+    using their existing visible results in an isolated copy. No original,
+    revision, paragraph or formatting is accepted, rejected or reconstructed.
+    """
+    from .field_export import prepare_export_copy
+    folder = Path(folder)
+    tracked = folder / (folder.name + '-tracked.docx')
+    pdf = folder / (folder.name + '-document.pdf')
+    metadata = {'export_mode': 'word-native', 'frozen_fields': 0}
+    try:
+        _run_script(comparison_script(folder, '', export_source=tracked))
+    except WordScriptError as exc:
+        if '(-1708)' not in str(exc):
+            raise
+        pdf.unlink(missing_ok=True)
+        render_copy = folder / (folder.name + '-render.docx')
+        count = prepare_export_copy(tracked, render_copy)
+        if not count:
+            raise exc
+        _run_script(comparison_script(folder, '', export_source=render_copy))
+        metadata.update(export_mode='word-field-snapshot', frozen_fields=count)
+    if not pdf.is_file():
+        raise RuntimeError('Word skapade inte den förväntade PDF-filen.')
+    return metadata
