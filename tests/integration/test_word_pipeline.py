@@ -70,6 +70,8 @@ def test_added_trailing_column_roundtrip(tmp_path):
     summary = compare_documents(original, modified, output)
     assert summary['added_words'] > 0 and summary['deleted_words'] > 0
     assert len(PdfReader(output).pages) > summary['document_pages']
+    text = '\n'.join(page.extract_text() for page in PdfReader(output).pages)
+    assert all(label not in text for label in ('Infogade celler', 'Borttagna celler', 'Inserted cells', 'Deleted cells'))
 
 
 @pytest.mark.parametrize('scenario', [

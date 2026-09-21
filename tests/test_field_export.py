@@ -87,10 +87,13 @@ def test_source_cannot_be_overwritten(tmp_path):
 
 @pytest.mark.parametrize('code', ['-1743', '-1712', '-50'])
 def test_other_word_errors_never_trigger_field_recovery(tmp_path, monkeypatch, code):
+    source = package(tmp_path)
+    source.rename(tmp_path / (tmp_path.name + '-tracked.docx'))
     monkeypatch.setattr(bridge, '_run_script', lambda *a: (_ for _ in ()).throw(bridge.WordScriptError(f'({code})')))
     with pytest.raises(bridge.WordScriptError):
         bridge.export_document(tmp_path)
-    assert not list(tmp_path.iterdir())
+    assert not (tmp_path / (tmp_path.name + '-render.docx')).exists()
+    assert not (tmp_path / (tmp_path.name + '-document.pdf')).exists()
 
 
 def test_pdf_retry_is_once_and_preserves_tracked_file(tmp_path, monkeypatch):
@@ -109,6 +112,6 @@ def test_pdf_retry_is_once_and_preserves_tracked_file(tmp_path, monkeypatch):
         assert '-render.docx' in script
         pdf.write_bytes(b'PDF validated by caller')
     monkeypatch.setattr(bridge, '_run_script', run)
-    assert bridge.export_document(tmp_path) == {'export_mode': 'word-field-snapshot', 'frozen_fields': 2}
+    assert bridge.export_document(tmp_path) == {'export_mode': 'word-field-snapshot', 'frozen_fields': 2, 'hidden_property_revisions': 0}
     assert len(calls) == 2
     assert tracked.read_bytes() == before

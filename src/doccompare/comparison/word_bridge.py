@@ -63,7 +63,8 @@ def comparison_script(folder, author, *, export_source=None, projection_source=N
         set revisions mode of view of active window of document resultName to in line revisions
         set revisions view of view of active window of document resultName to revisions view final
         set show revisions and comments of view of active window of document resultName to true
-        set show format changes of view of active window of document resultName to false"""
+        set show format changes of view of active window of document resultName to false
+        set show comments of view of active window of document resultName to false"""
     if export_source is None and projection_source is None:
         operation = f'''        open file name {old} add to recent files false
         set sourceName to my waitForDocument({old}, {apple_string(folder.name + "-original.docx")})
@@ -207,18 +208,22 @@ def export_document(folder):
     revision, paragraph or formatting is accepted, rejected or reconstructed.
     """
     from .field_export import prepare_export_copy
+    from .inline_export import prepare_inline_copy
     folder = Path(folder)
     tracked = folder / (folder.name + '-tracked.docx')
     pdf = folder / (folder.name + '-document.pdf')
-    metadata = {'export_mode': 'word-native', 'frozen_fields': 0}
+    inline = folder / (folder.name + '-inline.docx')
+    hidden_properties = prepare_inline_copy(tracked, inline)
+    metadata = {'export_mode': 'word-native', 'frozen_fields': 0,
+                'hidden_property_revisions': hidden_properties}
     try:
-        _run_script(comparison_script(folder, '', export_source=tracked))
+        _run_script(comparison_script(folder, '', export_source=inline))
     except WordScriptError as exc:
         if '(-1708)' not in str(exc):
             raise
         pdf.unlink(missing_ok=True)
         render_copy = folder / (folder.name + '-render.docx')
-        count = prepare_export_copy(tracked, render_copy)
+        count = prepare_export_copy(inline, render_copy)
         if not count:
             raise exc
         _run_script(comparison_script(folder, '', export_source=render_copy))
