@@ -38,7 +38,7 @@ def word_lock(root, timeout=180):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-def comparison_script(folder, author, *, export_source=None, projection_source=None):
+def comparison_script(folder, author, *, export_source=None, projection_source=None, detect_format=True):
     old, new, tracked, pdf, accepted, rejected = [apple_string(folder / (folder.name + '-' + name)) for name in (
         'original.docx', 'modified.docx', 'tracked.docx', 'document.pdf', 'accepted.docx', 'rejected.docx')]
     display_settings = {
@@ -65,9 +65,9 @@ def comparison_script(folder, author, *, export_source=None, projection_source=N
         set show revisions and comments of view of active window of document resultName to true
         set show format changes of view of active window of document resultName to false"""
     if export_source is None and projection_source is None:
-        operation = f'''        open POSIX file {old} add to recent files false
+        operation = f'''        open file name {old} add to recent files false
         set sourceName to my waitForDocument({old}, {apple_string(folder.name + "-original.docx")})
-        compare document sourceName path {new} author name {apple_string(author)} target compare target current detect format changes true ignore all comparison warnings false add to recent files false
+        compare document sourceName path {new} author name {apple_string(author)} target compare target current detect format changes {str(detect_format).lower()} ignore all comparison warnings false add to recent files false
         set resultName to sourceName
         set sourceName to ""
 {display}
@@ -80,14 +80,14 @@ def comparison_script(folder, author, *, export_source=None, projection_source=N
         projection_path = apple_string(projection_source)
         projection_name = apple_string(Path(projection_source).name)
         cleanup += f'\n    my closeOwnedDocument({projection_path}, {projection_name})'
-        operation = f'''        open POSIX file {projection_path} add to recent files false
+        operation = f'''        open file name {projection_path} add to recent files false
         set resultName to my waitForDocument({projection_path}, {projection_name})
         accept all revisions document resultName
         save as document resultName file name {accepted} file format format document add to recent files false
         set resultName to my waitForDocument({accepted}, {apple_string(folder.name + "-accepted.docx")})
         close document resultName saving no
         set resultName to ""
-        open POSIX file {projection_path} add to recent files false
+        open file name {projection_path} add to recent files false
         set resultName to my waitForDocument({projection_path}, {projection_name})
         reject all revisions document resultName
         save as document resultName file name {rejected} file format format document add to recent files false
@@ -102,7 +102,7 @@ def comparison_script(folder, author, *, export_source=None, projection_source=N
         export_path = apple_string(export_source)
         export_name = apple_string(export_source.name)
         cleanup += f'\n    my closeOwnedDocument({export_path}, {export_name})'
-        operation = f'''        open POSIX file {export_path} add to recent files false
+        operation = f'''        open file name {export_path} add to recent files false
         set resultName to my waitForDocument({export_path}, {export_name})
 {display}
         repaginate document resultName
@@ -180,10 +180,16 @@ def _run_script(script):
     return result.stdout.strip()
 
 
-def run_comparison(folder, author='DocCompare'):
+def run_comparison(folder, author='DocCompare', *, detect_format=True):
+    folder = Path(folder)
+    version = _run_script(comparison_script(folder, author, detect_format=detect_format))
+    refresh_projections(folder, author)
+    return version
+
+
+def refresh_projections(folder, author='DocCompare'):
     from .story_projection import prepare_projection_copy
     folder = Path(folder)
-    version = _run_script(comparison_script(folder, author))
     tracked = folder / (folder.name + '-tracked.docx')
     projection = folder / (folder.name + '-projection.docx')
     prepare_projection_copy(tracked, projection)
@@ -191,11 +197,10 @@ def run_comparison(folder, author='DocCompare'):
     for name in ('tracked.docx', 'accepted.docx', 'rejected.docx'):
         if not (Path(folder) / (Path(folder).name + '-' + name)).is_file():
             raise RuntimeError(f'Word skapade inte den förväntade arbetsfilen {name}.')
-    return version
 
 
 def export_document(folder):
-    """Render only after the untouched comparison passes both source checks.
+    """Render only after the comparison passes both source checks.
 
     Word can reject PDF export of revised complex fields (-1708). Retry once
     using their existing visible results in an isolated copy. No original,

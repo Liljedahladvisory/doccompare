@@ -6,8 +6,8 @@ import shutil
 import sys
 import tempfile
 
-from .revisions import preflight, revision_ledger, summarize, verify_projections
-from .word_bridge import run_comparison, export_document, word_lock, word_workspace
+from .revisions import ComparisonQualityError, preflight, revision_ledger, summarize, verify_projections
+from .word_bridge import run_comparison, refresh_projections, export_document, word_lock, word_workspace
 from doccompare.rendering.quality_report import assemble_pdf, render_note, validate_pdf, remove_broken_internal_links
 
 
@@ -35,10 +35,34 @@ def compare_documents(original, modified, output, *, author='DocCompare',
         status('Jämför med Microsoft Word…')
         version = run_comparison(folder, author)
         status('Kontrollerar resultatet mot båda källversionerna…')
-        column_notes = verify_projections(file('original.docx'), file('modified.docx'),
-                                          file('accepted.docx'), file('rejected.docx'),
-                                          tracked=file('tracked.docx'))
+        def verify():
+            return verify_projections(file('original.docx'), file('modified.docx'),
+                                      file('accepted.docx'), file('rejected.docx'),
+                                      tracked=file('tracked.docx'))
+        recovered_numbers = 0
+        comparison_mode = 'word-native'
+        try:
+            column_notes = verify()
+        except ComparisonQualityError:
+            status('Word-kontrollen kräver en ny jämförelse utan formateringsändringar…')
+            for name in ('tracked.docx', 'projection.docx', 'accepted.docx', 'rejected.docx'):
+                file(name).unlink(missing_ok=True)
+            version = run_comparison(folder, author, detect_format=False)
+            comparison_mode = 'word-without-formatting'
+            try:
+                column_notes = verify()
+            except ComparisonQualityError:
+                from .number_recovery import recover_missing_numbers
+                recovered_numbers = recover_missing_numbers(
+                    file('original.docx'), file('modified.docx'), file('accepted.docx'),
+                    file('rejected.docx'), file('tracked.docx'), file('recovered.docx'), author)
+                if not recovered_numbers:
+                    raise
+                os.replace(file('recovered.docx'), file('tracked.docx'))
+                refresh_projections(folder, author)
+                column_notes = verify()
         summary = summarize(revision_ledger(file('tracked.docx')))
+        summary.update(comparison_mode=comparison_mode, recovered_numbers=recovered_numbers)
         for note in column_notes:
             summary['revisions'].append({
                 'kind': 'tblGridChange', 'part': 'word/document.xml', 'paragraph': 0,

@@ -127,3 +127,13 @@ Sidhuvudet visar nu Liljedahl Advisorys logotypbild i stället för det konfigur
 ## Logotypbakgrund 0.3.0a6
 
 Efter visuell återkoppling har den mörka ytan bakom logotypen tagits bort. Logotypbilden är oförändrad och ligger direkt mot appens ljusa bakgrund. Installerad version 0.3.0a6 har startats och granskats visuellt; paketerade källfiler, logotyp och signatur har kontrollerats. ckglib bekräftar samma GUI-anropskedja; versionsfilerna är avsiktliga ändringar utanför funktionsplanen. Inga funktioner eller PDF-färger ändrades.
+
+## Word-återhämtning 0.3.0a12
+
+Word kan skapa extra tomma celler och tappa en infogad siffra vid jämförelse av omarbetade, tabelltunga rapporter. En underkänd projektionskontroll kör därför om jämförelsen en gång utan formateringsrevisioner. Båda källkontrollerna gäller fortfarande. Om endast en entydig ersättning av ett manuellt styckenummer saknas får en separat kandidat återställa siffran som en spårad insättning. Kandidaten kräver exakt gammal projektion, oförändrad sekvens av berättelser/stycken/rader/celler, en unik enkel brödtextparagraf och Words bevarade borttagning av det gamla numret. Fält, länkar, listnumreringsattribut, andra innehållsskillnader och tvetydiga träffar avvisas. Word måste därefter åter skapa accepterade och förkastade kontrollkopior som klarar samma fullständiga kontroller före export.
+
+Word öppnar nu arbetskopior med sitt uttryckliga `file name`-argument. Detta har verifierats med en annan OneDrive-fil öppen i Word; det tidigare generiska öppningsanropet kunde lämna arbetskopian oöppnad. Originalfiler och andra öppna dokument lämnas orörda.
+
+90 tester godkända, varav 18 med riktig Word. Tio nya tester täcker den begränsade nummeråterhämtningen, tvetydig eller annan skada och att även ett reparerat men fortsatt felaktigt Word-resultat måste stoppas före PDF-export. Det felande privata rapportparet klarar nu båda kontrollerna och ger 68 dokumentsidor plus sammanfattning. Rubrikens borttagna och tillagda siffra har granskats visuellt. Words markeringar av omfattande tabellersättningar ger en lång rapport och behåller marginalnoter om celländringar.
+
+ckglib kartlade `word_bridge.run_comparison` och dess anrop. Ny återhämtningsmodul och tester, versionsfiler, importkontroll i appens verkliga bootstrap samt denna dokumentation är uttryckliga tillägg utanför den bakåtriktade anropsplanen. CLI, adapter och befintliga tester har lästs och körts utan ändringar eftersom det publika tjänstegränssnittet och standardbeteendet är oförändrade. Inga nya beroenden har tillkommit. Begränsningarna för signering, generell Word-täckning och ren releasebyggnad ovan kvarstår.

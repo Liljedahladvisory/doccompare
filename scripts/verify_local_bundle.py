@@ -37,7 +37,7 @@ tree.body.pop()
 exec(compile(tree, str(boot), 'exec'), {'__file__': str(boot), '__name__': '__main__'})
 
 modules = ['comparison.service', 'comparison.revisions', 'comparison.word_bridge',
-           'comparison.field_export', 'comparison.story_projection',
+           'comparison.field_export', 'comparison.story_projection', 'comparison.number_recovery',
            'rendering.quality_report', 'parsers.docx_parser', 'gui']
 for name in modules:
     module = importlib.import_module('doccompare.' + name)

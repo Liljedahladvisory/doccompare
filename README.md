@@ -29,6 +29,7 @@ Word sätter dokumentsidorna. En separat svensk jämförelsebilaga fogas sist ut
 3. Spara Words redline. Gör ärvda sidhuvuds-/sidfotsreferenser uttryckliga i en separat kontrollkopia, utan att ändra deras effektiva innehåll.
 4. Låt Word acceptera respektive avvisa ändringarna i kontrollkopior.
 5. Stäm av text, fältinstruktioner, länkmål, bildreferenser och stycke-/tabellgränser mot respektive källa. Beräknade fältresultat och tomma stycken normaliseras i denna kontroll.
+   Om Word-resultatet inte stämmer görs ett nytt försök utan formateringsrevisioner. En entydigt borttappad ersättningssiffra i ett enkelt manuellt numrerat stycke kan återställas som spårad insättning; därefter måste Word och båda källkontrollerna köras igen. Annan eller tvetydig skada stoppas fortfarande.
 6. Läs statistiken från Words faktiska revisioner och exportera med Word först efter godkänd kontroll. Vid det specifika exportfelet -1708 får Word ett nytt försök med säkert avgränsade, ändrade fälts befintliga visningsvärden i en separat exportkopia. Text, revisionsmarkeringar och layout behålls. Sidnummerfält förblir aktiva; fält utan ett säkert separerbart visningsvärde lämnas oförändrade. Åtgärden anges i sammanfattning och PDF-metadata.
 7. Validera PDF och kontrollera att sidformat och sidornas innehållsströmmar överlever sammanfogningen oförändrade. Publicera lokalt genom atomiskt filbyte först när alla steg lyckats.
 
