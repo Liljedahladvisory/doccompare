@@ -1,4 +1,5 @@
 """DocCompare GUI — modern macOS desktop app."""
+from doccompare import APP_VERSION
 import tkinter as tk
 from tkinter import ttk, filedialog
 
@@ -236,7 +237,7 @@ STRINGS = {
         "rendering":           "Renderar PDF\u2026",
         "done":                "Klart! Rapport sparad: {filename}",
         "reset_done":          "Välj nya dokument för nästa jämförelse.",
-        "structure_changes":   "{count} ändring(ar) i sidhuvud/sidfot",
+        "structure_changes":   "{count} ändring(ar) i sidhuvud, sidfot eller noter",
         "added":               "tillagda",
         "deleted":             "borttagna",
         "unchanged":           "oförändrade",
@@ -274,7 +275,7 @@ STRINGS = {
         "rendering":           "Rendering PDF\u2026",
         "done":                "Done! Report saved: {filename}",
         "reset_done":          "Select new documents for the next comparison.",
-        "structure_changes":   "{count} header/footer change(s)",
+        "structure_changes":   "{count} header, footer or note change(s)",
         "added":               "added",
         "deleted":             "deleted",
         "unchanged":           "unchanged",
@@ -362,21 +363,22 @@ def _send_registration(data: dict) -> bool:
     return False
 
 
+# Palette shared with Meeting Recorder LLT (macOS light theme).
 # ── Colour palette ──────────────────────────────────────────────────────────
-BG      = "#0E0D0C"
-BG2     = "#161412"
-BG3     = "#1E1B18"
-BG4     = "#272320"
-BORDER  = "#332E28"
-BORDER2 = "#4A4238"
-FG      = "#F2EEE8"
-FG2     = "#C8B89A"
-FG3     = "#E0D4C0"
-FG_DIM  = "#9A8A72"
-ACCENT  = "#E07820"
-ACCENT2 = "#C05E0A"
-RED     = "#D95050"
-GREEN   = "#4AB870"
+BG      = "#F5F7FA"
+BG2     = "#FFFFFF"
+BG3     = "#EEF2F6"
+BG4     = "#E4EAF1"
+BORDER  = "#D9E0EA"
+BORDER2 = "#C7D0DD"
+FG      = "#111827"
+FG2     = "#4B5563"
+FG3     = "#1F2937"
+FG_DIM  = "#8A94A6"
+ACCENT  = "#0A84FF"
+ACCENT2 = "#006ADC"
+RED     = "#FF453A"
+GREEN   = "#30D158"
 
 # ── Fonts ───────────────────────────────────────────────────────────────────
 FONT_LOGO1   = ("Helvetica Neue", 14, "bold")
@@ -401,7 +403,7 @@ def _style_widgets():
     style = ttk.Style()
     style.theme_use("default")
     style.configure(
-        "Orange.Horizontal.TProgressbar",
+        "Accent.Horizontal.TProgressbar",
         troughcolor=BG3, background=ACCENT, bordercolor=BG,
         lightcolor=ACCENT, darkcolor=ACCENT,
     )
@@ -500,7 +502,7 @@ class RoundedButton(tk.Canvas):
 class DocCompareApp:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("DocCompare")
+        self.root.title("DocCompare Preview" if os.environ.get("DOCCOMPARE_PREVIEW") else "DocCompare")
         self.root.resizable(True, True)
         self.root.configure(bg=BG)
         self.root.geometry("600x700")
@@ -559,15 +561,15 @@ class DocCompareApp:
 
         name_row = tk.Frame(left, bg=BG)
         name_row.pack(anchor="w")
+        from PIL import Image, ImageTk
+        with Image.open(Path(__file__).parent / "assets" / "logo-dark.png") as logo:
+            logo = logo.convert("RGBA")
+            logo.thumbnail((260, 36), Image.Resampling.LANCZOS)
+            self._brand_logo_image = ImageTk.PhotoImage(logo, master=self.root)
         self._logo_name_lbl = tk.Label(
-            name_row, text=self._display_name(),
-            font=FONT_LOGO1, bg=BG, fg=FG)
+            name_row, image=self._brand_logo_image,
+            bg=BG, padx=8, pady=4, borderwidth=0, highlightthickness=0)
         self._logo_name_lbl.pack(side="left")
-        tk.Label(name_row, text="  DocCompare",
-                 font=FONT_LOGO2, bg=BG, fg=FG2).pack(side="left")
-
-        tk.Label(left, text="Powered by Liljedahl Legal Tech",
-                 font=FONT_POWERED, bg=BG, fg=FG_DIM).pack(anchor="w", pady=(3, 0))
 
         right = tk.Frame(header, bg=BG)
         right.pack(side="right", fill="y")
@@ -586,7 +588,7 @@ class DocCompareApp:
         badge_frame = tk.Frame(title_frame, bg=BG3, padx=8, pady=2,
                                highlightbackground=BORDER, highlightthickness=1)
         badge_frame.pack(side="left", padx=(12, 0), pady=(8, 0))
-        tk.Label(badge_frame, text="v0.2.0", font=FONT_MS, bg=BG3,
+        tk.Label(badge_frame, text=f"v{APP_VERSION}", font=FONT_MS, bg=BG3,
                  fg=ACCENT).pack()
 
         tk.Label(outer, text=self._s("subtitle"),
@@ -634,7 +636,7 @@ class DocCompareApp:
         # ── Progress + status ────────────────────────────────────────────
         self.progress = ttk.Progressbar(
             outer, mode="indeterminate", length=400,
-            style="Orange.Horizontal.TProgressbar")
+            style="Accent.Horizontal.TProgressbar")
         self.progress.pack(fill="x", pady=(0, 4))
 
         self.status_label = tk.Label(
@@ -647,7 +649,7 @@ class DocCompareApp:
         footer.pack(side="bottom", fill="x", pady=(16, 0))
         tk.Label(footer,
                  text="Liljedahl Legal Tech  \u2022  Liljedahl Advisory AB",
-                 font=FONT_XS, bg=BG, fg=BORDER2).pack()
+                 font=FONT_XS, bg=BG, fg=FG_DIM).pack()
 
     def _file_card(self, parent, title, btn_text, command,
                    default_text=None, optional=False, drop_callback=None):
@@ -921,7 +923,6 @@ class DocCompareApp:
                     })
                 threading.Thread(target=_reg, daemon=True).start()
 
-                self._logo_name_lbl.config(text=self._display_name())
                 dlg.destroy()
 
                 # Show language picker after registration
@@ -1124,7 +1125,6 @@ class DocCompareApp:
             self._config["user_name"] = name
             self._config["language"] = new_lang
             save_config(self._config)
-            self._logo_name_lbl.config(text=self._display_name())
             dlg.destroy()
             if lang_changed:
                 self._populate_main_ui()
@@ -1337,50 +1337,17 @@ class DocCompareApp:
 
         def worker():
             try:
-                from doccompare.comparison.adapters import get_adapter
+                from doccompare.comparison.service import compare_documents
 
-                summary = None
-                adapter = get_adapter()
-                if adapter:
-                    set_status(self._s("comparing"))
-                    _debug_log(f"comparison adapter start ({adapter.__class__.__name__}) at {elapsed()}")
-                    try:
-                        summary = adapter.compare_and_export(
-                            self.original_path, self.modified_path, output,
-                            original_name=self.original_path.name,
-                            modified_name=self.modified_path.name,
-                        )
-                        _debug_log(f"comparison adapter success at {elapsed()}")
-                    except RuntimeError as e:
-                        _debug_log(f"comparison adapter fallback at {elapsed()}: {e}")
-                        summary = None  # fall through to fallback
-
-                if summary is None:
-                    from doccompare.comparison.ooxml_engine import compare as ooxml_compare
-                    from doccompare.rendering.pdf_pipeline import produce_pdf
-
-                    set_status(self._s("comparing"))
-                    _debug_log(f"comparison ooxml start at {elapsed()}")
-                    doc_tree, summary = ooxml_compare(
-                        self.original_path, self.modified_path, None,
-                    )
-                    _debug_log(f"comparison ooxml done at {elapsed()}")
-                    set_status(self._s("rendering"))
-                    _debug_log(f"comparison pdf render start at {elapsed()}")
-                    produce_pdf(
-                        doc_tree, output, summary,
-                        original_name=self.original_path.name,
-                        modified_name=self.modified_path.name,
-                        docx_path=self.modified_path,
-                    )
-                    _debug_log(f"comparison pdf render done at {elapsed()}")
-
+                summary = compare_documents(
+                    self.original_path, self.modified_path, output,
+                    progress=set_status,
+                )
                 s = summary
                 msg = (
                     f"{self._s('done', filename=output.name)}\n"
                     f"+{s.get('added_words', 0)} {self._s('added')}  "
-                    f"\u2212{s.get('deleted_words', 0)} {self._s('deleted')}  "
-                    f"{s.get('unchanged_words', 0)} {self._s('unchanged')}"
+                    f"\u2212{s.get('deleted_words', 0)} {self._s('deleted')}"
                 )
                 structure_count = len(s.get("structure_changes") or [])
                 if structure_count:
@@ -1389,7 +1356,7 @@ class DocCompareApp:
                 self.root.after(0, lambda: (self._cancel_comparison_status_jobs(), self._on_success(msg, output)))
             except Exception as e:
                 _debug_log(f"comparison error at {elapsed()}: {type(e).__name__}: {e}")
-                self.root.after(0, lambda: (self._cancel_comparison_status_jobs(), self._on_error(str(e))))
+                self.root.after(0, lambda error=str(e): (self._cancel_comparison_status_jobs(), self._on_error(error)))
 
         threading.Thread(target=worker, daemon=True).start()
 

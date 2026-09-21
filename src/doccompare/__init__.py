@@ -1,2 +1,2 @@
 """DocCompare — CLI document comparison tool."""
-APP_VERSION = __version__ = "0.2.0"
+APP_VERSION = __version__ = "0.3.0a13"
